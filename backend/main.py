@@ -11,12 +11,20 @@ class Request(BaseModel):
     api_key: str | None = None
     mode: str = "planner-first"
 
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
 @app.post("/api/run")
 async def run(req: Request):
     result = run_workflow(req.goal, req.api_key, req.mode)
-    explanation = explain_workflow(req.goal)
+    explanation = explain_workflow(req.goal, req.mode, result.get("source", "unknown"))
+
     return {
-        "result": result,
+        "source": result.get("source", "unknown"),
+        "result": result.get("agents", {}),
+        "goal_output": result.get("goal_output", ""),
+        "workflow_summary": result.get("workflow_summary", ""),
         "explanation": explanation
     }
 
