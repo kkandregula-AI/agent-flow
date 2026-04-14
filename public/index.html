@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>AgentFlow Studio</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+
+</head>
+
+<body>
+
+<h1>AgentFlow Studio</h1>
+
+<div class="app">
+
+  <div class="card">
+    <textarea id="goal">Create a PRD for privacy-first expense tracker</textarea>
+    <input id="apikey" placeholder="Optional OpenAI API Key">
+    <button onclick="run()">Run Workflow</button>
+  </div>
+
+  <div class="card">
+    <h3>Execution Flow</h3>
+    <div id="flow"></div>
+  </div>
+
+  <div class="card">
+    <h3>Live Feed</h3>
+    <div id="feed"></div>
+  </div>
+
+  <div class="card">
+    <h3>Goal Output</h3>
+    <div id="output"></div>
+  </div>
+
+  <div class="card">
+    <h3>Agentic Explanation</h3>
+    <div id="explainer"></div>
+  </div>
+
+</div>
+
+<footer>Built by Krishnamurthy Kandregula</footer>
+
+<script src="app.js"></script>
+
+</body>
+</html>
