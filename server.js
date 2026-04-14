@@ -15,25 +15,41 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
-/**
- * These are demo defaults only.
- * If you want more accurate cost estimation, set these in Railway variables:
- * OPENAI_INPUT_COST_PER_1K=0.00015
- * OPENAI_OUTPUT_COST_PER_1K=0.0006
- */
-const INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
-const OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
+// Estimated pricing placeholders for display only.
+// Override these in Railway variables if you want different values.
+const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
+const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
+const GROQ_COST_PER_1K = Number(process.env.GROQ_COST_PER_1K || 0.00008);
 
-function escapeGoal(goal) {
-  return String(goal || "").trim().slice(0, 4000);
+function clean(value, max = 4000) {
+  return String(value || "").trim().slice(0, max);
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function estimateCost(usage) {
+function extractOpenAIText(response) {
+  if (response?.output_text) return response.output_text.trim();
+
+  try {
+    const parts = [];
+    for (const item of response?.output || []) {
+      for (const content of item?.content || []) {
+        if (typeof content?.text === "string") {
+          parts.push(content.text);
+        }
+      }
+    }
+    return parts.join("\n").trim();
+  } catch {
+    return "";
+  }
+}
+
+function estimateOpenAIUsage(usage) {
   const inputTokens =
     usage?.input_tokens ??
     usage?.prompt_tokens ??
@@ -46,103 +62,273 @@ function estimateCost(usage) {
     usage?.output_tokens_details?.total_tokens ??
     0;
 
-  const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+  const totalTokens = usage?.total_tokens ?? (inputTokens + outputTokens);
 
-  const estimated =
-    (inputTokens / 1000) * INPUT_COST_PER_1K +
-    (outputTokens / 1000) * OUTPUT_COST_PER_1K;
+  const estimatedCost =
+    (inputTokens / 1000) * OPENAI_INPUT_COST_PER_1K +
+    (outputTokens / 1000) * OPENAI_OUTPUT_COST_PER_1K;
 
   return {
     inputTokens,
     outputTokens,
     totalTokens,
-    estimatedCost: Number.isFinite(estimated) ? estimated : 0,
+    estimatedCost,
   };
 }
 
-function extractText(response) {
-  if (response?.output_text) {
-    return response.output_text.trim();
-  }
+function estimateGroqUsage(usage) {
+  const promptTokens = usage?.prompt_tokens ?? 0;
+  const completionTokens = usage?.completion_tokens ?? 0;
+  const totalTokens = usage?.total_tokens ?? (promptTokens + completionTokens);
+  const estimatedCost = (totalTokens / 1000) * GROQ_COST_PER_1K;
 
-  try {
-    const chunks = [];
-    for (const item of response?.output || []) {
-      for (const content of item?.content || []) {
-        if (typeof content?.text === "string") {
-          chunks.push(content.text);
-        }
-      }
-    }
-    return chunks.join("\n").trim();
-  } catch {
-    return "";
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    estimatedCost,
+  };
+}
+
+function buildFlowOrder(mode) {
+  const normalized = String(mode || "planner-first").toLowerCase();
+
+  switch (normalized) {
+    case "sequential":
+      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
+    case "parallel":
+      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
+    case "debate":
+      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
+    case "planner-first":
+    default:
+      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
   }
 }
 
-function buildFallbackWorkflow(goal, reason = "No working AI provider available.") {
-  const cleanGoal = escapeGoal(goal);
+function styleInstruction(style) {
+  const normalized = String(style || "balanced").toLowerCase();
+
+  switch (normalized) {
+    case "concise":
+      return "Be concise. Keep outputs short, clear, and compact.";
+    case "detailed":
+      return "Be detailed. Add useful context, stronger structure, and richer explanation.";
+    case "executive":
+      return "Use executive tone. Make the output polished, strategic, and leadership-friendly.";
+    case "balanced":
+    default:
+      return "Be balanced. Keep outputs clear, practical, and moderately detailed.";
+  }
+}
+
+function buildPrompts(goal, mode, instructionStyle) {
+  const styleRule = styleInstruction(instructionStyle);
+  const modeLabel = String(mode || "planner-first");
 
   return {
-    source: "Fallback Engine",
+    Orchestrator: `
+You are the Orchestrator Agent in a multi-agent system.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Your job:
+- interpret the user's goal
+- explain which agents should act and in what pattern
+- describe the workflow in 3 to 5 lines
+- mention why this mode is suitable
+
+Do not produce the final deliverable.
+`.trim(),
+
+    Planner: `
+You are the Planner Agent.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Create a practical execution plan:
+- 4 to 6 steps
+- simple numbered format
+- specific to the user's goal
+`.trim(),
+
+    Research: `
+You are the Research Agent.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Provide:
+- user intent
+- assumptions
+- risks
+- context that will help the Writer
+
+Keep it relevant and practical.
+`.trim(),
+
+    Writer: `
+You are the Writer Agent.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Create the final user-facing deliverable.
+It should directly solve the user's goal.
+No meta commentary.
+`.trim(),
+
+    Reviewer: `
+You are the Reviewer Agent.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Review the drafted output for:
+- alignment to original goal
+- clarity
+- completeness
+- quality
+
+Return:
+- short validation note
+- one improvement note.
+`.trim(),
+  };
+}
+
+function buildSharedMemory(goal, flowOrder, result, providerLabel) {
+  return {
+    execution_context: `Goal: ${goal}`,
+    task_graph: flowOrder.join(" → "),
+    planner_output: result.Planner?.output || "",
+    research_output: result.Research?.output || "",
+    reviewer_notes: result.Reviewer?.output || "",
+    final_synthesis:
+      result.Orchestrator?.output ||
+      `Workflow completed with ${providerLabel}.`,
+  };
+}
+
+function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback mode was used.") {
+  const cleanGoal = clean(goal);
+  const flowOrder = buildFlowOrder(mode);
+
+  const result = {
+    Orchestrator: {
+      output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work across Planner, Research, Writer, and Reviewer.`,
+      time: 240,
+      tokens: "simulated",
+      cost: "N/A",
+      status: "completed",
+    },
+    Planner: {
+      output: `Execution plan for: ${cleanGoal}
+1. Interpret the goal clearly
+2. Break work into structured steps
+3. Gather context and assumptions
+4. Draft the user-facing deliverable
+5. Review and refine before final output`,
+      time: 520,
+      tokens: "simulated",
+      cost: "N/A",
+      status: "completed",
+    },
+    Research: {
+      output: `Context for: ${cleanGoal}
+- The user expects a visible end result
+- Structure increases trust and readability
+- Agent separation reduces duplicated work
+- Review step helps keep the final answer aligned`,
+      time: 610,
+      tokens: "simulated",
+      cost: "N/A",
+      status: "completed",
+    },
+    Writer: {
+      output: `Created a structured deliverable for: ${cleanGoal}
+
+Delivered result:
+- Clear interpretation of the request
+- Organized output aligned to user intent
+- Draft informed by research and plan
+- Ready for review and final delivery`,
+      time: 760,
+      tokens: "simulated",
+      cost: "N/A",
+      status: "completed",
+    },
+    Reviewer: {
+      output: `Validation complete.
+The output is aligned, structured, and understandable.
+Improvement note: if a live model is available, the system can generate more specific content.`,
+      time: 430,
+      tokens: "simulated",
+      cost: "N/A",
+      status: "completed",
+    },
+  };
+
+  return {
+    source: "Template Fallback",
     providerStatus: {
       openai: "not_used",
+      groq: "not_used",
       reason,
     },
-    result: {
-      Orchestrator: {
-        output: `Interpreted the goal and routed the workflow through Planner, Research, Writer, and Reviewer steps for: ${cleanGoal}`,
-        time: 280,
-        tokens: "simulated",
-        cost: "N/A",
-        status: "completed",
-      },
-      Planner: {
-        output: `Planned execution for: ${cleanGoal}
-1. Interpret the user goal
-2. Break it into structured steps
-3. Gather context and assumptions
-4. Draft the deliverable
-5. Review and finalize`,
-        time: 500,
-        tokens: "simulated",
-        cost: "N/A",
-        status: "completed",
-      },
-      Research: {
-        output: `Gathered context and assumptions for: ${cleanGoal}
-- User expects a clear result
-- Structured output improves trust
-- Orchestration reduces duplicated work`,
-        time: 620,
-        tokens: "simulated",
-        cost: "N/A",
-        status: "completed",
-      },
-      Writer: {
-        output: `Created a structured deliverable for: ${cleanGoal}
-
-Delivered output:
-- Clear interpretation of the objective
-- Structured response aligned to user intent
-- Organized final draft based on agent collaboration`,
-        time: 710,
-        tokens: "simulated",
-        cost: "N/A",
-        status: "completed",
-      },
-      Reviewer: {
-        output: `Validated that the output is aligned, readable, and complete enough for user presentation.`,
-        time: 430,
-        tokens: "simulated",
-        cost: "N/A",
-        status: "completed",
-      },
+    meta: {
+      mode,
+      instructionStyle,
+      flowOrder,
     },
+    result,
+    shared_memory: buildSharedMemory(cleanGoal, flowOrder, result, "template fallback"),
     goal_output: `Goal achieved for: ${cleanGoal}
 
 The system interpreted the request, planned the work, gathered context, drafted the output, and reviewed it before final delivery.`,
-    explanation: `This run used the fallback engine. The Orchestrator coordinated the work, the Planner structured the path, the Research agent gathered context, the Writer created the deliverable, and the Reviewer validated quality.`,
+    explanation: `This run used the template fallback. The orchestrator coordinated the workflow, the Planner structured the path, the Research agent gathered context, the Writer produced the user-facing result, and the Reviewer validated quality.`,
     totals: {
       totalTokens: "simulated",
       estimatedCost: "N/A",
@@ -150,66 +336,14 @@ The system interpreted the request, planned the work, gathered context, drafted 
   };
 }
 
-function buildAgentPrompts(goal) {
-  return {
-    Orchestrator: `You are the Orchestrator Agent.
-Goal: ${goal}
-
-Your job:
-- Interpret the user's goal
-- Explain how work should be routed across Planner, Research, Writer, and Reviewer
-- Keep it concise
-- Return a short orchestration note only`,
-
-    Planner: `You are the Planner Agent.
-Goal: ${goal}
-
-Create a clear step-by-step execution plan.
-Rules:
-- 4 to 6 steps
-- practical and easy to understand
-- no markdown table`,
-
-    Research: `You are the Research Agent.
-Goal: ${goal}
-
-Provide useful context, assumptions, risks, and what the user likely expects.
-Rules:
-- concise
-- practical
-- directly relevant to the goal`,
-
-    Writer: `You are the Writer Agent.
-Goal: ${goal}
-
-Create the final user-facing deliverable.
-Rules:
-- polished
-- structured
-- directly solves the goal
-- no meta commentary`,
-
-    Reviewer: `You are the Reviewer Agent.
-Goal: ${goal}
-
-Review the drafted output for:
-- alignment to the original goal
-- clarity
-- completeness
-- quality
-
-Return a short validation note and one improvement note.`,
-  };
-}
-
-async function runOpenAIWorkflow(goal, apiKey) {
+async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
   const client = new OpenAI({ apiKey });
-  const prompts = buildAgentPrompts(goal);
+  const prompts = buildPrompts(goal, mode, instructionStyle);
+  const flowOrder = buildFlowOrder(mode);
 
   const result = {};
   let totalTokens = 0;
   let totalEstimatedCost = 0;
-  let writerOutput = "";
 
   for (const [agentName, prompt] of Object.entries(prompts)) {
     const started = Date.now();
@@ -219,8 +353,8 @@ async function runOpenAIWorkflow(goal, apiKey) {
       input: prompt,
     });
 
-    const text = extractText(response) || `${agentName} completed the task.`;
-    const usage = estimateCost(response.usage);
+    const text = extractOpenAIText(response) || `${agentName} completed the task.`;
+    const usage = estimateOpenAIUsage(response.usage);
 
     result[agentName] = {
       output: text,
@@ -233,10 +367,6 @@ async function runOpenAIWorkflow(goal, apiKey) {
     totalTokens += Number(usage.totalTokens || 0);
     totalEstimatedCost += Number(usage.estimatedCost || 0);
 
-    if (agentName === "Writer") {
-      writerOutput = text;
-    }
-
     await sleep(120);
   }
 
@@ -244,13 +374,98 @@ async function runOpenAIWorkflow(goal, apiKey) {
     source: "OpenAI",
     providerStatus: {
       openai: "working",
+      groq: "not_used",
       model: OPENAI_MODEL,
     },
+    meta: {
+      mode,
+      instructionStyle,
+      flowOrder,
+    },
     result,
+    shared_memory: buildSharedMemory(goal, flowOrder, result, "OpenAI"),
     goal_output:
-      writerOutput ||
+      result.Writer?.output ||
       `A final goal output was produced for: ${goal}`,
-    explanation: `This run used OpenAI successfully. The Orchestrator interpreted the request and routed the work. The Planner created the execution path, the Research agent gathered context, the Writer produced the final output, and the Reviewer validated quality.`,
+    explanation: `This run used OpenAI successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Planner defined the path, the Research agent gathered context, the Writer created the deliverable, and the Reviewer validated it.`,
+    totals: {
+      totalTokens,
+      estimatedCost: `$${totalEstimatedCost.toFixed(4)}`,
+    },
+  };
+}
+
+async function runGroqWorkflow(goal, apiKey, mode, instructionStyle) {
+  const prompts = buildPrompts(goal, mode, instructionStyle);
+  const flowOrder = buildFlowOrder(mode);
+
+  const result = {};
+  let totalTokens = 0;
+  let totalEstimatedCost = 0;
+
+  for (const [agentName, prompt] of Object.entries(prompts)) {
+    const started = Date.now();
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: [
+          { role: "system", content: `You are the ${agentName} Agent.` },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || payload?.message || "Groq request failed.");
+    }
+
+    const text =
+      payload?.choices?.[0]?.message?.content?.trim() ||
+      `${agentName} completed the task.`;
+
+    const usage = estimateGroqUsage(payload?.usage);
+
+    result[agentName] = {
+      output: text,
+      time: Date.now() - started,
+      tokens: usage.totalTokens,
+      cost: `$${usage.estimatedCost.toFixed(4)}`,
+      status: "completed",
+    };
+
+    totalTokens += Number(usage.totalTokens || 0);
+    totalEstimatedCost += Number(usage.estimatedCost || 0);
+
+    await sleep(120);
+  }
+
+  return {
+    source: "Groq",
+    providerStatus: {
+      openai: "not_used",
+      groq: "working",
+      model: GROQ_MODEL,
+    },
+    meta: {
+      mode,
+      instructionStyle,
+      flowOrder,
+    },
+    result,
+    shared_memory: buildSharedMemory(goal, flowOrder, result, "Groq"),
+    goal_output:
+      result.Writer?.output ||
+      `A final goal output was produced for: ${goal}`,
+    explanation: `This run used Groq successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Planner defined the path, the Research agent gathered context, the Writer created the deliverable, and the Reviewer validated it.`,
     totals: {
       totalTokens,
       estimatedCost: `$${totalEstimatedCost.toFixed(4)}`,
@@ -265,7 +480,7 @@ async function validateOpenAIKey(apiKey) {
       model: OPENAI_MODEL,
       input: "Reply with only: OK",
     });
-    const text = extractText(response);
+    const text = extractOpenAIText(response);
     return {
       ok: true,
       message: text || "OK",
@@ -281,13 +496,14 @@ async function validateOpenAIKey(apiKey) {
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
-    model: OPENAI_MODEL,
+    openaiModel: OPENAI_MODEL,
+    groqModel: GROQ_MODEL,
   });
 });
 
 app.post("/api/validate-key", async (req, res) => {
   try {
-    const userApiKey = String(req.body?.userApiKey || "").trim();
+    const userApiKey = clean(req.body?.userApiKey || "", 1000);
     if (!userApiKey) {
       return res.status(400).json({
         ok: false,
@@ -307,54 +523,61 @@ app.post("/api/validate-key", async (req, res) => {
 
 app.post("/api/run", async (req, res) => {
   try {
-    const goal = escapeGoal(req.body?.goal);
-    const userApiKey = String(req.body?.userApiKey || "").trim();
-    const serverApiKey = String(process.env.OPENAI_API_KEY || "").trim();
+    const goal = clean(req.body?.goal);
+    const userApiKey = clean(req.body?.userApiKey || "", 1000);
+    const mode = clean(req.body?.mode || "planner-first", 50).toLowerCase();
+    const instructionStyle = clean(req.body?.instructionStyle || "balanced", 50).toLowerCase();
+
+    const serverOpenAIKey = clean(process.env.OPENAI_API_KEY || "", 1000);
+    const serverGroqKey = clean(process.env.GROQ_API_KEY || "", 1000);
 
     if (!goal) {
       return res.status(400).json({
         error: "Goal is required.",
         result: {},
+        shared_memory: {},
         goal_output: "",
         explanation: "",
       });
     }
 
-    // Priority: user key -> server key -> fallback
     if (userApiKey) {
       try {
-        const workflow = await runOpenAIWorkflow(goal, userApiKey);
+        const workflow = await runOpenAIWorkflow(goal, userApiKey, mode, instructionStyle);
         workflow.source = "User OpenAI Key";
         return res.json(workflow);
       } catch (error) {
-        console.error("User key workflow failed:", error?.message || error);
-        const fallback = buildFallbackWorkflow(
-          goal,
-          `User key provided, but OpenAI request failed: ${error?.message || "Unknown error"}`
-        );
-        fallback.providerStatus.openai = "failed_user_key";
-        return res.json(fallback);
+        console.error("User OpenAI workflow failed:", error?.message || error);
       }
     }
 
-    if (serverApiKey) {
+    if (serverOpenAIKey) {
       try {
-        const workflow = await runOpenAIWorkflow(goal, serverApiKey);
+        const workflow = await runOpenAIWorkflow(goal, serverOpenAIKey, mode, instructionStyle);
         workflow.source = "Server OpenAI Key";
         return res.json(workflow);
       } catch (error) {
-        console.error("Server key workflow failed:", error?.message || error);
-        const fallback = buildFallbackWorkflow(
-          goal,
-          `Server key exists, but OpenAI request failed: ${error?.message || "Unknown error"}`
-        );
-        fallback.providerStatus.openai = "failed_server_key";
-        return res.json(fallback);
+        console.error("Server OpenAI workflow failed:", error?.message || error);
+      }
+    }
+
+    if (serverGroqKey) {
+      try {
+        const workflow = await runGroqWorkflow(goal, serverGroqKey, mode, instructionStyle);
+        workflow.source = "Server Groq Key";
+        return res.json(workflow);
+      } catch (error) {
+        console.error("Groq workflow failed:", error?.message || error);
       }
     }
 
     return res.json(
-      buildFallbackWorkflow(goal, "No OpenAI key was available, so fallback mode was used.")
+      buildFallbackWorkflow(
+        goal,
+        mode,
+        instructionStyle,
+        "OpenAI and Groq were unavailable or failed, so template fallback was used."
+      )
     );
   } catch (error) {
     console.error("Run workflow error:", error);
@@ -362,6 +585,7 @@ app.post("/api/run", async (req, res) => {
       error: "Workflow failed",
       message: error?.message || "Unknown server error",
       result: {},
+      shared_memory: {},
       goal_output: "",
       explanation: "",
       totals: {
