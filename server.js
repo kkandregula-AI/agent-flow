@@ -406,46 +406,57 @@ async function runGroqWorkflow(goal, apiKey, mode, instructionStyle) {
   for (const [agentName, prompt] of Object.entries(prompts)) {
     const started = Date.now();
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages: [
-          { role: "system", content: `You are the ${agentName} Agent.` },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.3,
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
 
-    const payload = await response.json();
+    try {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          messages: [
+            { role: "system", content: `You are the ${agentName} Agent.` },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.3,
+        }),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      throw new Error(payload?.error?.message || payload?.message || "Groq request failed.");
+      clearTimeout(timeout);
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || payload?.message || `Groq request failed with ${response.status}`);
+      }
+
+      const text =
+        payload?.choices?.[0]?.message?.content?.trim() ||
+        `${agentName} completed the task.`;
+
+      const usage = estimateGroqUsage(payload?.usage);
+
+      result[agentName] = {
+        output: text,
+        time: Date.now() - started,
+        tokens: usage.totalTokens,
+        cost: `$${usage.estimatedCost.toFixed(4)}`,
+        status: "completed",
+      };
+
+      totalTokens += Number(usage.totalTokens || 0);
+      totalEstimatedCost += Number(usage.estimatedCost || 0);
+
+      await sleep(120);
+    } catch (error) {
+      clearTimeout(timeout);
+      throw new Error(`Groq failed at ${agentName}: ${error.message}`);
     }
-
-    const text =
-      payload?.choices?.[0]?.message?.content?.trim() ||
-      `${agentName} completed the task.`;
-
-    const usage = estimateGroqUsage(payload?.usage);
-
-    result[agentName] = {
-      output: text,
-      time: Date.now() - started,
-      tokens: usage.totalTokens,
-      cost: `$${usage.estimatedCost.toFixed(4)}`,
-      status: "completed",
-    };
-
-    totalTokens += Number(usage.totalTokens || 0);
-    totalEstimatedCost += Number(usage.estimatedCost || 0);
-
-    await sleep(120);
   }
 
   return {
@@ -499,6 +510,58 @@ app.get("/api/health", (req, res) => {
     openaiModel: OPENAI_MODEL,
     groqModel: GROQ_MODEL,
   });
+});
+
+app.get("/api/test-groq", async (req, res) => {
+  try {
+    const groqKey = clean(process.env.GROQ_API_KEY || "", 1000);
+
+    if (!groqKey) {
+      return res.status(400).json({
+        ok: false,
+        message: "No GROQ_API_KEY found in environment.",
+      });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${groqKey}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: [{ role: "user", content: "Reply with only: GROQ_OK" }],
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        ok: false,
+        message: payload?.error?.message || payload?.message || "Groq request failed.",
+      });
+    }
+
+    return res.json({
+      ok: true,
+      model: GROQ_MODEL,
+      reply: payload?.choices?.[0]?.message?.content || "",
+      usage: payload?.usage || {},
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message,
+    });
+  }
 });
 
 app.post("/api/validate-key", async (req, res) => {
@@ -568,6 +631,15 @@ app.post("/api/run", async (req, res) => {
         return res.json(workflow);
       } catch (error) {
         console.error("Groq workflow failed:", error?.message || error);
+
+        return res.json(
+          buildFallbackWorkflow(
+            goal,
+            mode,
+            instructionStyle,
+            `Groq failed: ${error?.message || "Unknown error"}. Template fallback was used.`
+          )
+        );
       }
     }
 
@@ -576,7 +648,7 @@ app.post("/api/run", async (req, res) => {
         goal,
         mode,
         instructionStyle,
-        "OpenAI and Groq were unavailable or failed, so template fallback was used."
+        "No OpenAI or Groq key was available, so template fallback was used."
       )
     );
   } catch (error) {
