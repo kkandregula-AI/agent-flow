@@ -25,7 +25,7 @@ async function run() {
   const visualizer = document.getElementById("visualizer");
 
   sourceBadge.textContent = "Running...";
-  providerNote.textContent = "Checking providers and executing workflow.";
+  providerNote.textContent = "Checking provider and executing workflow.";
   totalsBox.innerHTML = "";
   flow.innerHTML = "<div class='flow-step active'>Starting workflow...</div>";
   feed.innerHTML = "<div class='feed-item'>Running agents...</div>";
@@ -76,8 +76,6 @@ async function run() {
 
     if (data.providerStatus?.openai === "working") {
       providerNote.textContent = `OpenAI is working${data.providerStatus.model ? ` using ${data.providerStatus.model}` : ""}.`;
-    } else if (data.providerStatus?.groq === "working") {
-      providerNote.textContent = `Groq fallback is working${data.providerStatus.model ? ` using ${data.providerStatus.model}` : ""}.`;
     } else {
       providerNote.textContent = data.providerStatus?.reason || "Template fallback was used.";
     }
