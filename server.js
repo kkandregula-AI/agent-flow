@@ -2,7 +2,6 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
-import OpenAI from "openai";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,80 +14,25 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const AGENT_TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 15000);
+const USE_FAST_AGENT_SET = String(process.env.USE_FAST_AGENT_SET || "true").toLowerCase() === "true";
+
 const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
 const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
-
-// keep workflows snappy
-const AGENT_TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 20000);
-
-// set true if you want all 5 agents, false for faster production flow
-const USE_FAST_AGENT_SET = String(process.env.USE_FAST_AGENT_SET || "true").toLowerCase() === "true";
 
 function clean(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
 
-function extractOpenAIText(response) {
-  if (response?.output_text) return response.output_text.trim();
-
-  try {
-    const parts = [];
-    for (const item of response?.output || []) {
-      for (const content of item?.content || []) {
-        if (typeof content?.text === "string") {
-          parts.push(content.text);
-        }
-      }
-    }
-    return parts.join("\n").trim();
-  } catch {
-    return "";
-  }
-}
-
-function estimateOpenAIUsage(usage) {
-  const inputTokens =
-    usage?.input_tokens ??
-    usage?.prompt_tokens ??
-    usage?.input_tokens_details?.total_tokens ??
-    0;
-
-  const outputTokens =
-    usage?.output_tokens ??
-    usage?.completion_tokens ??
-    usage?.output_tokens_details?.total_tokens ??
-    0;
-
-  const totalTokens = usage?.total_tokens ?? (inputTokens + outputTokens);
-
-  const estimatedCost =
-    (inputTokens / 1000) * OPENAI_INPUT_COST_PER_1K +
-    (outputTokens / 1000) * OPENAI_OUTPUT_COST_PER_1K;
-
-  return {
-    inputTokens,
-    outputTokens,
-    totalTokens,
-    estimatedCost,
-  };
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildFlowOrder(mode, fastMode = true) {
-  const normalized = String(mode || "planner-first").toLowerCase();
-
-  // fast mode uses 3 live LLM calls + visualized goal output
   if (fastMode) {
     return ["Orchestrator", "Writer", "Reviewer", "Goal Output"];
   }
-
-  switch (normalized) {
-    case "sequential":
-    case "parallel":
-    case "debate":
-    case "planner-first":
-    default:
-      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
-  }
+  return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
 }
 
 function styleInstruction(style) {
@@ -98,9 +42,9 @@ function styleInstruction(style) {
     case "concise":
       return "Be concise. Keep outputs short, clear, and compact.";
     case "detailed":
-      return "Be detailed. Add useful context, stronger structure, and richer explanation.";
+      return "Be detailed. Add useful context and stronger structure.";
     case "executive":
-      return "Use executive tone. Make the output polished, strategic, and leadership-friendly.";
+      return "Use executive tone. Make the output polished and leadership-friendly.";
     case "balanced":
     default:
       return "Be balanced. Keep outputs clear, practical, and moderately detailed.";
@@ -114,7 +58,7 @@ function buildPrompts(goal, mode, instructionStyle, fastMode = true) {
   if (fastMode) {
     return {
       Orchestrator: `
-You are the Orchestrator Agent in a multi-agent system.
+You are the Orchestrator Agent.
 
 Goal:
 ${goal}
@@ -183,7 +127,7 @@ Return:
 
   return {
     Orchestrator: `
-You are the Orchestrator Agent in a multi-agent system.
+You are the Orchestrator Agent.
 
 Goal:
 ${goal}
@@ -196,13 +140,7 @@ ${instructionStyle}
 
 ${styleRule}
 
-Your job:
-- interpret the user's goal
-- explain which agents should act and in what pattern
-- describe the workflow in 3 to 5 lines
-- mention why this mode is suitable
-
-Do not produce the final deliverable.
+Explain the workflow in 3 to 5 lines.
 `.trim(),
 
     Planner: `
@@ -221,8 +159,8 @@ ${styleRule}
 
 Create a practical execution plan:
 - 4 to 6 steps
-- simple numbered format
-- specific to the user's goal
+- numbered format
+- specific to the goal
 `.trim(),
 
     Research: `
@@ -243,9 +181,7 @@ Provide:
 - user intent
 - assumptions
 - risks
-- context that will help the Writer
-
-Keep it relevant and practical.
+- useful context
 `.trim(),
 
     Writer: `
@@ -264,7 +200,6 @@ ${styleRule}
 
 Create the final user-facing deliverable.
 It should directly solve the user's goal.
-No meta commentary.
 `.trim(),
 
     Reviewer: `
@@ -282,14 +217,14 @@ ${instructionStyle}
 ${styleRule}
 
 Review the drafted output for:
-- alignment to original goal
+- alignment
 - clarity
 - completeness
 - quality
 
 Return:
 - short validation note
-- one improvement note.
+- one improvement note
 `.trim(),
   };
 }
@@ -301,9 +236,7 @@ function buildSharedMemory(goal, flowOrder, result, providerLabel) {
     planner_output: result.Planner?.output || "Planner step omitted in fast mode.",
     research_output: result.Research?.output || "Research step omitted in fast mode.",
     reviewer_notes: result.Reviewer?.output || "",
-    final_synthesis:
-      result.Orchestrator?.output ||
-      `Workflow completed with ${providerLabel}.`,
+    final_synthesis: result.Orchestrator?.output || `Workflow completed with ${providerLabel}.`,
   };
 }
 
@@ -314,7 +247,7 @@ function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback 
   const result = {
     Orchestrator: {
       output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work toward final delivery.`,
-      time: 240,
+      time: 220,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
@@ -328,19 +261,18 @@ function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback 
 2. Break work into structured steps
 3. Gather context and assumptions
 4. Draft the user-facing deliverable
-5. Review and refine before final output`,
-            time: 520,
+5. Review and refine`,
+            time: 480,
             tokens: "simulated",
             cost: "N/A",
             status: "completed",
           },
           Research: {
             output: `Context for: ${cleanGoal}
-- The user expects a visible end result
-- Structure increases trust and readability
-- Agent separation reduces duplicated work
-- Review step helps keep the final answer aligned`,
-            time: 610,
+- User expects a visible end result
+- Structure increases trust
+- Review keeps the answer aligned`,
+            time: 560,
             tokens: "simulated",
             cost: "N/A",
             status: "completed",
@@ -352,18 +284,16 @@ function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback 
 Delivered result:
 - Clear interpretation of the request
 - Organized output aligned to user intent
-- Draft informed by context and orchestration
-- Ready for review and final delivery`,
-      time: 760,
+- Draft informed by orchestration and context`,
+      time: 690,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Reviewer: {
       output: `Validation complete.
-The output is aligned, structured, and understandable.
-Improvement note: if a live model is available, the system can generate more specific content.`,
-      time: 430,
+The output is aligned, structured, and understandable.`,
+      time: 390,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
@@ -394,23 +324,72 @@ The system interpreted the request, drafted the output, and reviewed it before f
   };
 }
 
-async function withTimeout(promise, ms, label) {
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms} ms`));
-    }, ms);
-  });
+function estimateOpenAICost(usage) {
+  const inputTokens = usage?.input_tokens || 0;
+  const outputTokens = usage?.output_tokens || 0;
+  const totalTokens = usage?.total_tokens || inputTokens + outputTokens;
+
+  const estimatedCost =
+    (inputTokens / 1000) * OPENAI_INPUT_COST_PER_1K +
+    (outputTokens / 1000) * OPENAI_OUTPUT_COST_PER_1K;
+
+  return {
+    totalTokens,
+    estimatedCost,
+  };
+}
+
+async function callOpenAI(prompt, apiKey, label) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
 
   try {
-    return await Promise.race([promise, timeoutPromise]);
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: prompt,
+      }),
+      signal: controller.signal,
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || `${label} failed with ${response.status}`);
+    }
+
+    return payload;
   } finally {
-    clearTimeout(timeoutId);
+    clearTimeout(timeout);
+  }
+}
+
+function extractResponseText(payload) {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  try {
+    const parts = [];
+    for (const item of payload?.output || []) {
+      for (const content of item?.content || []) {
+        if (typeof content?.text === "string") {
+          parts.push(content.text);
+        }
+      }
+    }
+    return parts.join("\n").trim();
+  } catch {
+    return "";
   }
 }
 
 async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
-  const client = new OpenAI({ apiKey });
   const prompts = buildPrompts(goal, mode, instructionStyle, USE_FAST_AGENT_SET);
   const flowOrder = buildFlowOrder(mode, USE_FAST_AGENT_SET);
 
@@ -421,17 +400,9 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
   for (const [agentName, prompt] of Object.entries(prompts)) {
     const started = Date.now();
 
-    const response = await withTimeout(
-      client.responses.create({
-        model: OPENAI_MODEL,
-        input: prompt,
-      }),
-      AGENT_TIMEOUT_MS,
-      `OpenAI ${agentName}`
-    );
-
-    const text = extractOpenAIText(response) || `${agentName} completed the task.`;
-    const usage = estimateOpenAIUsage(response.usage);
+    const payload = await callOpenAI(prompt, apiKey, `OpenAI ${agentName}`);
+    const text = extractResponseText(payload) || `${agentName} completed the task.`;
+    const usage = estimateOpenAICost(payload?.usage || {});
 
     result[agentName] = {
       output: text,
@@ -444,7 +415,7 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
     totalTokens += Number(usage.totalTokens || 0);
     totalEstimatedCost += Number(usage.estimatedCost || 0);
 
-    await sleep(120);
+    await sleep(100);
   }
 
   return {
@@ -460,9 +431,7 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
     },
     result,
     shared_memory: buildSharedMemory(goal, flowOrder, result, "OpenAI"),
-    goal_output:
-      result.Writer?.output ||
-      `A final goal output was produced for: ${goal}`,
+    goal_output: result.Writer?.output || `A final goal output was produced for: ${goal}`,
     explanation: `This run used OpenAI successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Writer created the deliverable, and the Reviewer validated it.`,
     totals: {
       totalTokens,
@@ -473,17 +442,8 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
 
 async function validateOpenAIKey(apiKey) {
   try {
-    const client = new OpenAI({ apiKey });
-    const response = await withTimeout(
-      client.responses.create({
-        model: OPENAI_MODEL,
-        input: "Reply with only: OK",
-      }),
-      12000,
-      "OpenAI key validation"
-    );
-
-    const text = extractOpenAIText(response);
+    const payload = await callOpenAI("Reply with only: OK", apiKey, "OpenAI validation");
+    const text = extractResponseText(payload);
     return {
       ok: true,
       message: text || "OK",
@@ -503,6 +463,32 @@ app.get("/api/health", (req, res) => {
     fastMode: USE_FAST_AGENT_SET,
     agentTimeoutMs: AGENT_TIMEOUT_MS,
   });
+});
+
+app.get("/api/test-openai", async (req, res) => {
+  try {
+    const serverOpenAIKey = clean(process.env.OPENAI_API_KEY || "", 1000);
+
+    if (!serverOpenAIKey) {
+      return res.status(400).json({
+        ok: false,
+        message: "No OPENAI_API_KEY found in environment.",
+      });
+    }
+
+    const payload = await callOpenAI("Reply with only: OPENAI_OK", serverOpenAIKey, "OpenAI test");
+    return res.json({
+      ok: true,
+      reply: extractResponseText(payload),
+      usage: payload?.usage || {},
+      model: OPENAI_MODEL,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message,
+    });
+  }
 });
 
 app.post("/api/validate-key", async (req, res) => {
@@ -531,7 +517,6 @@ app.post("/api/run", async (req, res) => {
     const userApiKey = clean(req.body?.userApiKey || "", 1000);
     const mode = clean(req.body?.mode || "planner-first", 50).toLowerCase();
     const instructionStyle = clean(req.body?.instructionStyle || "balanced", 50).toLowerCase();
-
     const serverOpenAIKey = clean(process.env.OPENAI_API_KEY || "", 1000);
 
     if (!goal) {
