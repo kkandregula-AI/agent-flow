@@ -7,8 +7,8 @@ async function run() {
   const output = document.getElementById("output");
   const explainer = document.getElementById("explainer");
 
-  flow.innerHTML = "<div class='node'>Starting workflow...</div>";
-  feed.innerHTML = "<div class='feed-item'>Running agents...</div>";
+  flow.innerHTML = "<div class='node active'>Calling backend...</div>";
+  feed.innerHTML = "<div class='feed-item'>Waiting for response...</div>";
   output.innerHTML = "";
   explainer.innerHTML = "";
 
@@ -26,9 +26,9 @@ async function run() {
     });
 
     const data = await res.json();
-    console.log("API response:", data);
+    console.log("API FULL RESPONSE:", data);
 
-    const agents = data.result || {};
+    const agents = data.result || data.agents || {};
     const names = Object.keys(agents);
 
     flow.innerHTML = "";
@@ -36,7 +36,7 @@ async function run() {
 
     if (names.length === 0) {
       flow.innerHTML = "<div class='node active'>No agent data returned</div>";
-      feed.innerHTML = "<div class='feed-item'>The backend responded, but no agent outputs were returned.</div>";
+      feed.innerHTML = `<div class="feed-item"><pre>${JSON.stringify(data, null, 2)}</pre></div>`;
       output.innerHTML = data.goal_output || "No goal output returned.";
       explainer.innerHTML = data.explanation || "No workflow explanation returned.";
       return;
@@ -45,16 +45,13 @@ async function run() {
     for (const name of names) {
       const r = agents[name];
 
-      const node = document.createElement("div");
-      node.className = "node active";
-      node.textContent = name;
-      flow.appendChild(node);
+      flow.innerHTML += `<div class="node active">${name}</div>`;
 
       feed.innerHTML += `
         <div class="feed-item">
           <strong>${name}</strong><br>
           ${String(r.output || "No output").replace(/\n/g, "<br>")}<br><br>
-          ⏱ ${r.time ?? "N/A"} ms<br>
+          Time: ${r.time ?? "N/A"} ms<br>
           Tokens: ${r.tokens ?? "N/A"}<br>
           Cost: ${r.cost ?? "N/A"}
         </div>
@@ -66,12 +63,14 @@ async function run() {
       ${String(data.goal_output || "No goal output returned.").replace(/\n/g, "<br>")}
     `;
 
-    explainer.innerHTML = String(data.explanation || "No workflow explanation returned.").replace(/\n/g, "<br>");
+    explainer.innerHTML = String(
+      data.explanation || "No workflow explanation returned."
+    ).replace(/\n/g, "<br>");
   } catch (err) {
     console.error(err);
-    flow.innerHTML = "<div class='node active'>Workflow failed</div>";
-    feed.innerHTML = `<div class="feed-item">Error: ${err.message}</div>`;
+    flow.innerHTML = "<div class='node active'>Request failed</div>";
+    feed.innerHTML = `<div class="feed-item">${err.message}</div>`;
     output.innerHTML = "The workflow did not complete successfully.";
-    explainer.innerHTML = "Please check Railway logs.";
+    explainer.innerHTML = "Check console and network tab.";
   }
 }
