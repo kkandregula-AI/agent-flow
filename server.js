@@ -15,18 +15,17 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-
-// Estimated pricing placeholders for display only.
-// Override these in Railway variables if you want different values.
 const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
 const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
 
+// keep workflows snappy
+const AGENT_TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 20000);
+
+// set true if you want all 5 agents, false for faster production flow
+const USE_FAST_AGENT_SET = String(process.env.USE_FAST_AGENT_SET || "true").toLowerCase() === "true";
+
 function clean(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function extractOpenAIText(response) {
@@ -74,16 +73,18 @@ function estimateOpenAIUsage(usage) {
   };
 }
 
-function buildFlowOrder(mode) {
+function buildFlowOrder(mode, fastMode = true) {
   const normalized = String(mode || "planner-first").toLowerCase();
+
+  // fast mode uses 3 live LLM calls + visualized goal output
+  if (fastMode) {
+    return ["Orchestrator", "Writer", "Reviewer", "Goal Output"];
+  }
 
   switch (normalized) {
     case "sequential":
-      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
     case "parallel":
-      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
     case "debate":
-      return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
     case "planner-first":
     default:
       return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
@@ -106,9 +107,79 @@ function styleInstruction(style) {
   }
 }
 
-function buildPrompts(goal, mode, instructionStyle) {
+function buildPrompts(goal, mode, instructionStyle, fastMode = true) {
   const styleRule = styleInstruction(instructionStyle);
   const modeLabel = String(mode || "planner-first");
+
+  if (fastMode) {
+    return {
+      Orchestrator: `
+You are the Orchestrator Agent in a multi-agent system.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Explain:
+- what the system is trying to achieve
+- why this mode is suitable
+- how work is handed to the next agents
+
+Keep it short and practical.
+`.trim(),
+
+      Writer: `
+You are the Writer Agent.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Create the final user-facing deliverable.
+It should directly solve the user's goal.
+No meta commentary.
+`.trim(),
+
+      Reviewer: `
+You are the Reviewer Agent.
+
+Goal:
+${goal}
+
+Mode:
+${modeLabel}
+
+Instruction style:
+${instructionStyle}
+
+${styleRule}
+
+Review the final deliverable for:
+- alignment to original goal
+- clarity
+- completeness
+- quality
+
+Return:
+- short validation note
+- one improvement note
+`.trim(),
+    };
+  }
 
   return {
     Orchestrator: `
@@ -227,8 +298,8 @@ function buildSharedMemory(goal, flowOrder, result, providerLabel) {
   return {
     execution_context: `Goal: ${goal}`,
     task_graph: flowOrder.join(" → "),
-    planner_output: result.Planner?.output || "",
-    research_output: result.Research?.output || "",
+    planner_output: result.Planner?.output || "Planner step omitted in fast mode.",
+    research_output: result.Research?.output || "Research step omitted in fast mode.",
     reviewer_notes: result.Reviewer?.output || "",
     final_synthesis:
       result.Orchestrator?.output ||
@@ -238,46 +309,50 @@ function buildSharedMemory(goal, flowOrder, result, providerLabel) {
 
 function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback mode was used.") {
   const cleanGoal = clean(goal);
-  const flowOrder = buildFlowOrder(mode);
+  const flowOrder = buildFlowOrder(mode, USE_FAST_AGENT_SET);
 
   const result = {
     Orchestrator: {
-      output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work across Planner, Research, Writer, and Reviewer.`,
+      output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work toward final delivery.`,
       time: 240,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
-    Planner: {
-      output: `Execution plan for: ${cleanGoal}
+    ...(USE_FAST_AGENT_SET
+      ? {}
+      : {
+          Planner: {
+            output: `Execution plan for: ${cleanGoal}
 1. Interpret the goal clearly
 2. Break work into structured steps
 3. Gather context and assumptions
 4. Draft the user-facing deliverable
 5. Review and refine before final output`,
-      time: 520,
-      tokens: "simulated",
-      cost: "N/A",
-      status: "completed",
-    },
-    Research: {
-      output: `Context for: ${cleanGoal}
+            time: 520,
+            tokens: "simulated",
+            cost: "N/A",
+            status: "completed",
+          },
+          Research: {
+            output: `Context for: ${cleanGoal}
 - The user expects a visible end result
 - Structure increases trust and readability
 - Agent separation reduces duplicated work
 - Review step helps keep the final answer aligned`,
-      time: 610,
-      tokens: "simulated",
-      cost: "N/A",
-      status: "completed",
-    },
+            time: 610,
+            tokens: "simulated",
+            cost: "N/A",
+            status: "completed",
+          },
+        }),
     Writer: {
       output: `Created a structured deliverable for: ${cleanGoal}
 
 Delivered result:
 - Clear interpretation of the request
 - Organized output aligned to user intent
-- Draft informed by research and plan
+- Draft informed by context and orchestration
 - Ready for review and final delivery`,
       time: 760,
       tokens: "simulated",
@@ -310,8 +385,8 @@ Improvement note: if a live model is available, the system can generate more spe
     shared_memory: buildSharedMemory(cleanGoal, flowOrder, result, "template fallback"),
     goal_output: `Goal achieved for: ${cleanGoal}
 
-The system interpreted the request, planned the work, gathered context, drafted the output, and reviewed it before final delivery.`,
-    explanation: `This run used the template fallback. The orchestrator coordinated the workflow, the Planner structured the path, the Research agent gathered context, the Writer produced the user-facing result, and the Reviewer validated quality.`,
+The system interpreted the request, drafted the output, and reviewed it before final delivery.`,
+    explanation: `This run used the template fallback. The orchestrator coordinated the workflow, the Writer produced the user-facing result, and the Reviewer validated quality.`,
     totals: {
       totalTokens: "simulated",
       estimatedCost: "N/A",
@@ -319,10 +394,25 @@ The system interpreted the request, planned the work, gathered context, drafted 
   };
 }
 
+async function withTimeout(promise, ms, label) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms} ms`));
+    }, ms);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
   const client = new OpenAI({ apiKey });
-  const prompts = buildPrompts(goal, mode, instructionStyle);
-  const flowOrder = buildFlowOrder(mode);
+  const prompts = buildPrompts(goal, mode, instructionStyle, USE_FAST_AGENT_SET);
+  const flowOrder = buildFlowOrder(mode, USE_FAST_AGENT_SET);
 
   const result = {};
   let totalTokens = 0;
@@ -331,10 +421,14 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
   for (const [agentName, prompt] of Object.entries(prompts)) {
     const started = Date.now();
 
-    const response = await client.responses.create({
-      model: OPENAI_MODEL,
-      input: prompt,
-    });
+    const response = await withTimeout(
+      client.responses.create({
+        model: OPENAI_MODEL,
+        input: prompt,
+      }),
+      AGENT_TIMEOUT_MS,
+      `OpenAI ${agentName}`
+    );
 
     const text = extractOpenAIText(response) || `${agentName} completed the task.`;
     const usage = estimateOpenAIUsage(response.usage);
@@ -369,7 +463,7 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
     goal_output:
       result.Writer?.output ||
       `A final goal output was produced for: ${goal}`,
-    explanation: `This run used OpenAI successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Planner defined the path, the Research agent gathered context, the Writer created the deliverable, and the Reviewer validated it.`,
+    explanation: `This run used OpenAI successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Writer created the deliverable, and the Reviewer validated it.`,
     totals: {
       totalTokens,
       estimatedCost: `$${totalEstimatedCost.toFixed(4)}`,
@@ -380,10 +474,15 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
 async function validateOpenAIKey(apiKey) {
   try {
     const client = new OpenAI({ apiKey });
-    const response = await client.responses.create({
-      model: OPENAI_MODEL,
-      input: "Reply with only: OK",
-    });
+    const response = await withTimeout(
+      client.responses.create({
+        model: OPENAI_MODEL,
+        input: "Reply with only: OK",
+      }),
+      12000,
+      "OpenAI key validation"
+    );
+
     const text = extractOpenAIText(response);
     return {
       ok: true,
@@ -401,6 +500,8 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     openaiModel: OPENAI_MODEL,
+    fastMode: USE_FAST_AGENT_SET,
+    agentTimeoutMs: AGENT_TIMEOUT_MS,
   });
 });
 
