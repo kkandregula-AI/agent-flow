@@ -1,43 +1,62 @@
 async function run() {
-  const goal = document.getElementById("goal").value;
-
-  const res = await fetch("http://localhost:8000/api/run", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ goal })
-  });
-
-  const data = await res.json();
+  const goal = document.getElementById("goal").value.trim();
+  const apiKey = document.getElementById("apikey").value.trim();
 
   const flow = document.getElementById("flow");
   const feed = document.getElementById("feed");
+  const output = document.getElementById("output");
+  const explainer = document.getElementById("explainer");
 
-  flow.innerHTML = "";
-  feed.innerHTML = "";
+  flow.innerHTML = "<div class='node'>Starting workflow...</div>";
+  feed.innerHTML = "<div class='feed-item'>Running agents...</div>";
+  output.innerHTML = "";
+  explainer.innerHTML = "";
 
-  for (let agent in data.result) {
+  try {
+    const res = await fetch("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        goal,
+        api_key: apiKey || null,
+        mode: "planner-first"
+      })
+    });
 
-    const node = document.createElement("div");
-    node.className = "node";
-    node.innerText = agent;
+    if (!res.ok) {
+      throw new Error(`Request failed: ${res.status}`);
+    }
 
-    flow.appendChild(node);
+    const data = await res.json();
 
-    // 🔥 Animation
-    await new Promise(r => setTimeout(r, 500));
-    node.classList.add("active");
+    flow.innerHTML = "";
+    feed.innerHTML = "";
 
-    const r = data.result[agent];
+    for (const agent in data.result) {
+      const r = data.result[agent];
 
-    feed.innerHTML += `
-      <div class="feed-item">
-        <strong>${agent}</strong><br>
-        ${r.output}<br>
-        ⏱ ${r.time}ms
-      </div>
-    `;
+      const node = document.createElement("div");
+      node.className = "node active";
+      node.textContent = agent;
+      flow.appendChild(node);
+
+      feed.innerHTML += `
+        <div class="feed-item">
+          <strong>${agent}</strong><br>
+          ${r.output}<br>
+          ⏱ ${r.time} ms<br>
+          Tokens: ${r.tokens}<br>
+          Cost: ${r.cost}
+        </div>
+      `;
+    }
+
+    output.innerHTML = "<strong>Goal Achieved Successfully</strong>";
+    explainer.textContent = data.explanation || "Workflow explanation generated.";
+  } catch (err) {
+    console.error(err);
+    flow.innerHTML = "";
+    feed.innerHTML = `<div class="feed-item">Error: ${err.message}</div>`;
+    output.innerHTML = "Workflow failed.";
   }
-
-  document.getElementById("output").innerText = "Goal Achieved Successfully";
-  document.getElementById("explainer").innerText = data.explanation;
 }
