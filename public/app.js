@@ -1,6 +1,8 @@
 async function run() {
   const goal = document.getElementById("goal").value.trim();
   const apiKey = document.getElementById("apikey").value.trim();
+  const mode = document.getElementById("mode").value;
+  const instructionStyle = document.getElementById("instructionStyle").value;
 
   const sourceBadge = document.getElementById("sourceBadge");
   const providerNote = document.getElementById("providerNote");
@@ -10,13 +12,37 @@ async function run() {
   const output = document.getElementById("output");
   const explainer = document.getElementById("explainer");
 
+  const memoryExecution = document.getElementById("memoryExecution");
+  const memoryTaskGraph = document.getElementById("memoryTaskGraph");
+  const memoryPlanner = document.getElementById("memoryPlanner");
+  const memoryResearch = document.getElementById("memoryResearch");
+  const memoryReviewer = document.getElementById("memoryReviewer");
+  const memorySynthesis = document.getElementById("memorySynthesis");
+
+  const visualMode = document.getElementById("visualMode");
+  const visualStyle = document.getElementById("visualStyle");
+  const visualOrder = document.getElementById("visualOrder");
+  const visualizer = document.getElementById("visualizer");
+
   sourceBadge.textContent = "Running...";
-  providerNote.textContent = "Checking provider and executing workflow.";
+  providerNote.textContent = "Checking providers and executing workflow.";
   totalsBox.innerHTML = "";
-  flow.innerHTML = "<div class='node active'>Starting workflow...</div>";
+  flow.innerHTML = "<div class='flow-step active'>Starting workflow...</div>";
   feed.innerHTML = "<div class='feed-item'>Running agents...</div>";
   output.innerHTML = "";
   explainer.innerHTML = "";
+
+  memoryExecution.textContent = "Running...";
+  memoryTaskGraph.textContent = "Running...";
+  memoryPlanner.textContent = "Waiting for planner output...";
+  memoryResearch.textContent = "Waiting for research output...";
+  memoryReviewer.textContent = "Waiting for reviewer notes...";
+  memorySynthesis.textContent = "Waiting for final synthesis...";
+
+  visualMode.textContent = mode;
+  visualStyle.textContent = instructionStyle;
+  visualOrder.textContent = "Building flow...";
+  visualizer.innerHTML = "";
 
   try {
     const res = await fetch("/api/run", {
@@ -27,6 +53,8 @@ async function run() {
       body: JSON.stringify({
         goal,
         userApiKey: apiKey || null,
+        mode,
+        instructionStyle,
       }),
     });
 
@@ -35,49 +63,90 @@ async function run() {
 
     const agents = data.result || {};
     const agentNames = Object.keys(agents);
+    const flowOrder = data.meta?.flowOrder || [
+      "Orchestrator",
+      "Planner",
+      "Research",
+      "Writer",
+      "Reviewer",
+      "Goal Output",
+    ];
 
     sourceBadge.textContent = data.source || "Unknown Source";
 
     if (data.providerStatus?.openai === "working") {
       providerNote.textContent = `OpenAI is working${data.providerStatus.model ? ` using ${data.providerStatus.model}` : ""}.`;
-    } else if (String(data.providerStatus?.openai || "").startsWith("failed")) {
-      providerNote.textContent = "OpenAI request failed. Fallback mode was used.";
+    } else if (data.providerStatus?.groq === "working") {
+      providerNote.textContent = `Groq fallback is working${data.providerStatus.model ? ` using ${data.providerStatus.model}` : ""}.`;
     } else {
-      providerNote.textContent = data.providerStatus?.reason || "Fallback mode was used.";
+      providerNote.textContent = data.providerStatus?.reason || "Template fallback was used.";
     }
 
     totalsBox.innerHTML = `
-      <div class="metric">
-        <span class="metric-label">Total Tokens</span>
-        <span class="metric-value">${escapeHtml(String(data.totals?.totalTokens ?? "N/A"))}</span>
+      <div class="metric-row">
+        <div class="metric-card">
+          <div class="metric-label">Mode Used</div>
+          <div class="metric-value">${escapeHtml(String(mode))}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Instruction Style</div>
+          <div class="metric-value">${escapeHtml(String(instructionStyle))}</div>
+        </div>
       </div>
-      <div class="metric">
-        <span class="metric-label">Estimated Cost</span>
-        <span class="metric-value">${escapeHtml(String(data.totals?.estimatedCost ?? "N/A"))}</span>
+      <div class="metric-row">
+        <div class="metric-card">
+          <div class="metric-label">Total Tokens</div>
+          <div class="metric-value">${escapeHtml(String(data.totals?.totalTokens ?? "N/A"))}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Estimated Cost</div>
+          <div class="metric-value">${escapeHtml(String(data.totals?.estimatedCost ?? "N/A"))}</div>
+        </div>
       </div>
     `;
+
+    memoryExecution.textContent = data.shared_memory?.execution_context || `Goal: ${goal}`;
+    memoryTaskGraph.textContent = data.shared_memory?.task_graph || flowOrder.join(" → ");
+    memoryPlanner.innerHTML = formatMultiline(data.shared_memory?.planner_output || "No planner output.");
+    memoryResearch.innerHTML = formatMultiline(data.shared_memory?.research_output || "No research output.");
+    memoryReviewer.innerHTML = formatMultiline(data.shared_memory?.reviewer_notes || "No reviewer notes.");
+    memorySynthesis.innerHTML = formatMultiline(data.shared_memory?.final_synthesis || "No final synthesis.");
+
+    visualMode.textContent = mode;
+    visualStyle.textContent = instructionStyle;
+    visualOrder.textContent = flowOrder.join(" → ");
+
+    renderVisualizer(flowOrder);
+    renderExecutionMap(flowOrder);
 
     flow.innerHTML = "";
     feed.innerHTML = "";
 
     if (agentNames.length === 0) {
-      flow.innerHTML = "<div class='node active'>No agent data returned</div>";
+      flow.innerHTML = "<div class='flow-step active'>No agent data returned</div>";
       feed.innerHTML = `<div class="feed-item"><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></div>`;
       output.innerHTML = data.goal_output || "No goal output returned.";
       explainer.innerHTML = data.explanation || "No workflow explanation returned.";
       return;
     }
 
-    for (const agentName of agentNames) {
+    for (const agentName of flowOrder) {
+      if (agentName === "Goal Output") {
+        await pulseVisualizer(agentName);
+        continue;
+      }
+
       const agent = agents[agentName];
+      if (!agent) continue;
 
-      const node = document.createElement("div");
-      node.className = "node";
-      node.textContent = agentName;
-      flow.appendChild(node);
+      flow.innerHTML += `
+        <div class="flow-step active">
+          <div class="flow-step-title">${escapeHtml(agentName)}</div>
+          <div class="flow-step-sub">${escapeHtml(String(agent.status || "completed"))}</div>
+        </div>
+      `;
 
-      await new Promise((resolve) => setTimeout(resolve, 180));
-      node.classList.add("active");
+      await pulseVisualizer(agentName);
 
       feed.innerHTML += `
         <div class="feed-item">
@@ -97,6 +166,8 @@ async function run() {
       `;
     }
 
+    await pulseVisualizer("Goal Output");
+
     output.innerHTML = `
       <div class="goal-result">
         <div class="goal-title">Goal Achieved Output</div>
@@ -114,7 +185,7 @@ async function run() {
     sourceBadge.textContent = "Error";
     providerNote.textContent = "The request failed before the workflow could complete.";
     totalsBox.innerHTML = "";
-    flow.innerHTML = "<div class='node active'>Workflow failed</div>";
+    flow.innerHTML = "<div class='flow-step active'>Workflow failed</div>";
     feed.innerHTML = `<div class="feed-item">Error: ${escapeHtml(error.message)}</div>`;
     output.innerHTML = "The workflow did not complete successfully.";
     explainer.innerHTML = "Please check the backend and browser console.";
@@ -131,7 +202,7 @@ async function validateKey() {
     return;
   }
 
-  keyStatus.textContent = "Validating key...";
+  keyStatus.textContent = "Validating OpenAI key...";
   keyStatus.className = "key-status neutral";
 
   try {
@@ -146,7 +217,7 @@ async function validateKey() {
     const data = await res.json();
 
     if (data.ok) {
-      keyStatus.textContent = "Key is valid and working.";
+      keyStatus.textContent = "OpenAI key is valid and working.";
       keyStatus.className = "key-status ok";
     } else {
       keyStatus.textContent = data.message || "Key validation failed.";
@@ -156,6 +227,54 @@ async function validateKey() {
     keyStatus.textContent = `Validation error: ${error.message}`;
     keyStatus.className = "key-status bad";
   }
+}
+
+function renderExecutionMap(flowOrder) {
+  const map = document.getElementById("executionMap");
+  map.innerHTML = "";
+
+  for (const step of flowOrder) {
+    map.innerHTML += `
+      <div class="map-card" id="map-${slug(step)}">
+        <div class="map-card-title">${escapeHtml(step)}</div>
+        <div class="map-card-sub">Waiting</div>
+      </div>
+    `;
+  }
+}
+
+function renderVisualizer(flowOrder) {
+  const visualizer = document.getElementById("visualizer");
+  visualizer.innerHTML = "";
+
+  for (const step of flowOrder) {
+    visualizer.innerHTML += `
+      <div class="visual-node" id="visual-${slug(step)}">
+        <div class="visual-kicker">${escapeHtml(step === "Goal Output" ? "Delivered Result" : "Agent Step")}</div>
+        <div class="visual-title">${escapeHtml(step)}</div>
+      </div>
+    `;
+  }
+}
+
+async function pulseVisualizer(stepName) {
+  const visualNode = document.getElementById(`visual-${slug(stepName)}`);
+  const mapNode = document.getElementById(`map-${slug(stepName)}`);
+
+  if (visualNode) {
+    visualNode.classList.add("active");
+  }
+  if (mapNode) {
+    mapNode.classList.add("active");
+    const sub = mapNode.querySelector(".map-card-sub");
+    if (sub) sub.textContent = "Completed";
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 180));
+}
+
+function slug(text) {
+  return String(text).toLowerCase().replaceAll(" ", "-");
 }
 
 function formatMultiline(text) {

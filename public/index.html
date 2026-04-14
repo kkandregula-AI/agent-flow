@@ -10,70 +10,158 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="styles.css?v=prod2" />
+  <link rel="stylesheet" href="styles.css?v=railway-groq-1" />
 </head>
 <body>
   <div class="page-shell">
     <header class="hero">
       <h1>AgentFlow Studio</h1>
-      <p class="hero-subtitle">Multi-agent orchestration playground with OpenAI validation and graceful fallback</p>
+      <p class="hero-subtitle">Multi-agent orchestration playground with OpenAI, Groq fallback, dynamic flow, and template safety net</p>
     </header>
 
-    <main class="grid">
-      <section class="card input-card">
-        <div class="card-title-row">
-          <h2>Workflow Input</h2>
-          <span id="sourceBadge" class="source-badge">Idle</span>
-        </div>
+    <main class="dashboard">
+      <aside class="left-column">
+        <section class="card brand-card">
+          <div class="brand-row">
+            <div class="brand-icon">AI</div>
+            <div>
+              <div class="brand-title">AgentFlow Studio</div>
+              <div class="brand-subtitle">Multi-agent orchestration playground</div>
+            </div>
+          </div>
+        </section>
 
-        <label for="goal" class="field-label">Goal</label>
-        <textarea id="goal">Create a PRD for privacy-first expense tracker</textarea>
+        <section class="card input-card">
+          <div class="card-title-row">
+            <h2>Goal</h2>
+            <span id="sourceBadge" class="source-badge">Idle</span>
+          </div>
 
-        <label for="apikey" class="field-label">Optional OpenAI API Key</label>
-        <input id="apikey" type="password" placeholder="Paste key to use real OpenAI execution" />
+          <label for="goal" class="field-label">User Goal</label>
+          <textarea id="goal">Create a PRD for privacy-first expense tracker</textarea>
 
-        <div class="button-row">
-          <button onclick="run()">Run Workflow</button>
-          <button class="secondary-btn" onclick="validateKey()">Check Key</button>
-        </div>
+          <label for="mode" class="field-label">Orchestration Mode</label>
+          <select id="mode">
+            <option value="planner-first">Planner First</option>
+            <option value="sequential">Sequential</option>
+            <option value="parallel">Parallel</option>
+            <option value="debate">Debate</option>
+          </select>
 
-        <div id="keyStatus" class="key-status neutral">No key checked yet.</div>
-        <div id="providerNote" class="provider-note">If no working key is available, the app will use fallback mode.</div>
-        <div id="totalsBox" class="totals-box"></div>
+          <label for="instructionStyle" class="field-label">Instruction Style</label>
+          <select id="instructionStyle">
+            <option value="balanced">Balanced</option>
+            <option value="concise">Concise</option>
+            <option value="detailed">Detailed</option>
+            <option value="executive">Executive</option>
+          </select>
+
+          <label for="apikey" class="field-label">Optional OpenAI API Key</label>
+          <input id="apikey" type="password" placeholder="Paste key to use real OpenAI execution" />
+
+          <div class="button-row">
+            <button onclick="run()">Run Workflow</button>
+            <button class="secondary-btn" onclick="validateKey()">Check OpenAI Key</button>
+          </div>
+
+          <div id="keyStatus" class="key-status neutral">No key checked yet.</div>
+          <div id="providerNote" class="provider-note">Provider order: User OpenAI Key → Server OpenAI Key → Server Groq Key → Template Fallback</div>
+          <div id="totalsBox" class="totals-box"></div>
+        </section>
+      </aside>
+
+      <section class="center-column">
+        <section class="card">
+          <div class="card-title-row">
+            <h2>Execution Map</h2>
+          </div>
+          <div id="executionMap" class="execution-map-grid"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-title-row">
+            <h2>Dynamic Flow Visualizer</h2>
+            <span class="source-badge">Live agent pulse</span>
+          </div>
+
+          <div class="visual-meta">
+            <div><strong>Mode:</strong> <span id="visualMode">planner-first</span></div>
+            <div><strong>Style:</strong> <span id="visualStyle">balanced</span></div>
+            <div><strong>Order:</strong> <span id="visualOrder">—</span></div>
+          </div>
+
+          <div id="visualizer" class="visualizer-grid"></div>
+          <div class="visual-caption">
+            The pulse highlights which part of the system is active. The orchestrator remains the control layer while specialist agents perform focused work.
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-title-row">
+            <h2>Live Feed</h2>
+          </div>
+          <div id="feed"></div>
+        </section>
       </section>
 
-      <section class="card">
-        <div class="card-title-row">
-          <h2>Execution Flow</h2>
-        </div>
-        <div id="flow" class="flow-list"></div>
-      </section>
+      <aside class="right-column">
+        <section class="card">
+          <div class="card-title-row">
+            <h2>Shared Memory</h2>
+          </div>
 
-      <section class="card live-feed-card">
-        <div class="card-title-row">
-          <h2>Live Feed</h2>
-        </div>
-        <div id="feed"></div>
-      </section>
+          <div class="memory-grid">
+            <div class="memory-card">
+              <div class="memory-label">Execution Context</div>
+              <div id="memoryExecution" class="memory-value">Run a workflow to see task plans, intermediate outputs, and final synthesis.</div>
+            </div>
 
-      <section class="card">
-        <div class="card-title-row">
-          <h2>Goal Output</h2>
-        </div>
-        <div id="output"></div>
-      </section>
+            <div class="memory-card">
+              <div class="memory-label">Task Graph</div>
+              <div id="memoryTaskGraph" class="memory-value">—</div>
+            </div>
 
-      <section class="card">
-        <div class="card-title-row">
-          <h2>Agentic Explanation</h2>
-        </div>
-        <div id="explainer"></div>
-      </section>
+            <div class="memory-card">
+              <div class="memory-label">Planner Output</div>
+              <div id="memoryPlanner" class="memory-value">Waiting for planner output...</div>
+            </div>
+
+            <div class="memory-card">
+              <div class="memory-label">Research Output</div>
+              <div id="memoryResearch" class="memory-value">Waiting for research output...</div>
+            </div>
+
+            <div class="memory-card">
+              <div class="memory-label">Reviewer Notes</div>
+              <div id="memoryReviewer" class="memory-value">Waiting for reviewer notes...</div>
+            </div>
+
+            <div class="memory-card">
+              <div class="memory-label">Final Synthesis</div>
+              <div id="memorySynthesis" class="memory-value">Waiting for final synthesis...</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-title-row">
+            <h2>Goal Output</h2>
+          </div>
+          <div id="output"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-title-row">
+            <h2>Agentic Explanation</h2>
+          </div>
+          <div id="explainer"></div>
+        </section>
+      </aside>
     </main>
 
     <footer>Built by Krishnamurthy Kandregula</footer>
   </div>
 
-  <script src="app.js?v=prod2"></script>
+  <script src="app.js?v=railway-groq-1"></script>
 </body>
 </html>
