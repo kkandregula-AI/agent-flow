@@ -4,43 +4,76 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AgentFlow Studio</title>
-  <link rel="stylesheet" href="styles.css?v=final1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="styles.css?v=prod2" />
 </head>
 <body>
-  <div class="page">
-    <h1>AgentFlow Studio</h1>
+  <div class="page-shell">
+    <header class="hero">
+      <h1>AgentFlow Studio</h1>
+      <p class="hero-subtitle">Multi-agent orchestration playground with OpenAI validation and graceful fallback</p>
+    </header>
 
-    <div class="grid">
-      <section class="card">
+    <main class="grid">
+      <section class="card input-card">
+        <div class="card-title-row">
+          <h2>Workflow Input</h2>
+          <span id="sourceBadge" class="source-badge">Idle</span>
+        </div>
+
+        <label for="goal" class="field-label">Goal</label>
         <textarea id="goal">Create a PRD for privacy-first expense tracker</textarea>
-        <input id="apikey" placeholder="Optional OpenAI API Key" />
-        <button onclick="run()">Run Workflow</button>
+
+        <label for="apikey" class="field-label">Optional OpenAI API Key</label>
+        <input id="apikey" type="password" placeholder="Paste key to use real OpenAI execution" />
+
+        <div class="button-row">
+          <button onclick="run()">Run Workflow</button>
+          <button class="secondary-btn" onclick="validateKey()">Check Key</button>
+        </div>
+
+        <div id="keyStatus" class="key-status neutral">No key checked yet.</div>
+        <div id="providerNote" class="provider-note">If no working key is available, the app will use fallback mode.</div>
+        <div id="totalsBox" class="totals-box"></div>
       </section>
 
       <section class="card">
-        <h3>Execution Flow</h3>
-        <div id="flow"></div>
+        <div class="card-title-row">
+          <h2>Execution Flow</h2>
+        </div>
+        <div id="flow" class="flow-list"></div>
       </section>
 
-      <section class="card">
-        <h3>Live Feed</h3>
+      <section class="card live-feed-card">
+        <div class="card-title-row">
+          <h2>Live Feed</h2>
+        </div>
         <div id="feed"></div>
       </section>
 
       <section class="card">
-        <h3>Goal Output</h3>
+        <div class="card-title-row">
+          <h2>Goal Output</h2>
+        </div>
         <div id="output"></div>
       </section>
 
       <section class="card">
-        <h3>Agentic Explanation</h3>
+        <div class="card-title-row">
+          <h2>Agentic Explanation</h2>
+        </div>
         <div id="explainer"></div>
       </section>
-    </div>
+    </main>
 
     <footer>Built by Krishnamurthy Kandregula</footer>
   </div>
 
-  <script src="app.js?v=final1"></script>
+  <script src="app.js?v=prod2"></script>
 </body>
 </html>
