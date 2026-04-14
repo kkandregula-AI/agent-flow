@@ -15,7 +15,9 @@ async function run() {
   try {
     const res = await fetch("/api/run", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({
         goal,
         api_key: apiKey || null,
@@ -24,39 +26,69 @@ async function run() {
     });
 
     if (!res.ok) {
-      throw new Error(`Request failed: ${res.status}`);
+      throw new Error(`Request failed with status ${res.status}`);
     }
 
     const data = await res.json();
+    const agents = data.result || {};
 
     flow.innerHTML = "";
     feed.innerHTML = "";
 
-    for (const agent in data.result) {
-      const r = data.result[agent];
+    const agentNames = Object.keys(agents);
+
+    if (agentNames.length === 0) {
+      flow.innerHTML = "<div class='node active'>No agent data returned</div>";
+      feed.innerHTML = "<div class='feed-item'>The backend responded, but no agent outputs were returned.</div>";
+      output.innerHTML = data.goal_output || "No goal output returned.";
+      explainer.innerHTML = data.explanation || "No workflow explanation returned.";
+      return;
+    }
+
+    for (const agent of agentNames) {
+      const r = agents[agent];
 
       const node = document.createElement("div");
-      node.className = "node active";
+      node.className = "node";
       node.textContent = agent;
       flow.appendChild(node);
+
+      await new Promise(resolve => setTimeout(resolve, 250));
+      node.classList.add("active");
 
       feed.innerHTML += `
         <div class="feed-item">
           <strong>${agent}</strong><br>
-          ${r.output}<br>
-          ⏱ ${r.time} ms<br>
-          Tokens: ${r.tokens}<br>
-          Cost: ${r.cost}
+          ${escapeHtml(String(r.output || "No output"))}<br><br>
+          ⏱ ${r.time ?? "N/A"} ms<br>
+          Tokens: ${r.tokens ?? "N/A"}<br>
+          Cost: ${r.cost ?? "N/A"}
         </div>
       `;
     }
 
-    output.innerHTML = "<strong>Goal Achieved Successfully</strong>";
-    explainer.textContent = data.explanation || "Workflow explanation generated.";
+    output.innerHTML = `
+      <strong>Goal Achieved Successfully</strong><br><br>
+      ${escapeHtml(data.goal_output || "No goal output returned.")}
+    `;
+
+    explainer.innerHTML = escapeHtml(
+      data.explanation || "Workflow explanation generated."
+    );
   } catch (err) {
     console.error(err);
-    flow.innerHTML = "";
-    feed.innerHTML = `<div class="feed-item">Error: ${err.message}</div>`;
-    output.innerHTML = "Workflow failed.";
+    flow.innerHTML = "<div class='node active'>Workflow failed</div>";
+    feed.innerHTML = `<div class="feed-item">Error: ${escapeHtml(err.message)}</div>`;
+    output.innerHTML = "The workflow did not complete successfully.";
+    explainer.innerHTML = "Please check the backend response or deployment logs.";
   }
+}
+
+function escapeHtml(text) {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
