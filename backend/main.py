@@ -17,14 +17,19 @@ def health():
 
 @app.post("/api/run")
 async def run(req: Request):
-    result = run_workflow(req.goal, req.api_key, req.mode)
-    explanation = explain_workflow(req.goal, req.mode, result.get("source", "unknown"))
+    workflow = run_workflow(req.goal, req.api_key, req.mode)
+
+    explanation = explain_workflow(
+        req.goal,
+        req.mode,
+        workflow.get("source", "unknown")
+    )
 
     return {
-        "source": result.get("source", "unknown"),
-        "result": result.get("agents", {}),
-        "goal_output": result.get("goal_output", ""),
-        "workflow_summary": result.get("workflow_summary", ""),
+        "source": workflow.get("source", "unknown"),
+        "result": workflow.get("agents", {}),
+        "goal_output": workflow.get("goal_output", ""),
+        "workflow_summary": workflow.get("workflow_summary", ""),
         "explanation": explanation
     }
 
