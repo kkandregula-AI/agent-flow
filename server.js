@@ -14,24 +14,15 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const AGENT_TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 15000);
-const USE_FAST_AGENT_SET = String(process.env.USE_FAST_AGENT_SET || "true").toLowerCase() === "true";
-
 const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
 const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 20000);
 
 function clean(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function buildFlowOrder(mode, fastMode = true) {
-  if (fastMode) {
-    return ["Orchestrator", "Writer", "Reviewer", "Goal Output"];
-  }
+function buildFlowOrder(mode) {
   return ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
 }
 
@@ -40,244 +31,51 @@ function styleInstruction(style) {
 
   switch (normalized) {
     case "concise":
-      return "Be concise. Keep outputs short, clear, and compact.";
+      return "Keep outputs short, clear, and compact.";
     case "detailed":
-      return "Be detailed. Add useful context and stronger structure.";
+      return "Be detailed, structured, and informative.";
     case "executive":
-      return "Use executive tone. Make the output polished and leadership-friendly.";
+      return "Use executive tone. Be polished and leadership-friendly.";
     case "balanced":
     default:
-      return "Be balanced. Keep outputs clear, practical, and moderately detailed.";
+      return "Be balanced. Keep outputs practical and moderately detailed.";
   }
-}
-
-function buildPrompts(goal, mode, instructionStyle, fastMode = true) {
-  const styleRule = styleInstruction(instructionStyle);
-  const modeLabel = String(mode || "planner-first");
-
-  if (fastMode) {
-    return {
-      Orchestrator: `
-You are the Orchestrator Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Explain:
-- what the system is trying to achieve
-- why this mode is suitable
-- how work is handed to the next agents
-
-Keep it short and practical.
-`.trim(),
-
-      Writer: `
-You are the Writer Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Create the final user-facing deliverable.
-It should directly solve the user's goal.
-No meta commentary.
-`.trim(),
-
-      Reviewer: `
-You are the Reviewer Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Review the final deliverable for:
-- alignment to original goal
-- clarity
-- completeness
-- quality
-
-Return:
-- short validation note
-- one improvement note
-`.trim(),
-    };
-  }
-
-  return {
-    Orchestrator: `
-You are the Orchestrator Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Explain the workflow in 3 to 5 lines.
-`.trim(),
-
-    Planner: `
-You are the Planner Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Create a practical execution plan:
-- 4 to 6 steps
-- numbered format
-- specific to the goal
-`.trim(),
-
-    Research: `
-You are the Research Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Provide:
-- user intent
-- assumptions
-- risks
-- useful context
-`.trim(),
-
-    Writer: `
-You are the Writer Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Create the final user-facing deliverable.
-It should directly solve the user's goal.
-`.trim(),
-
-    Reviewer: `
-You are the Reviewer Agent.
-
-Goal:
-${goal}
-
-Mode:
-${modeLabel}
-
-Instruction style:
-${instructionStyle}
-
-${styleRule}
-
-Review the drafted output for:
-- alignment
-- clarity
-- completeness
-- quality
-
-Return:
-- short validation note
-- one improvement note
-`.trim(),
-  };
-}
-
-function buildSharedMemory(goal, flowOrder, result, providerLabel) {
-  return {
-    execution_context: `Goal: ${goal}`,
-    task_graph: flowOrder.join(" → "),
-    planner_output: result.Planner?.output || "Planner step omitted in fast mode.",
-    research_output: result.Research?.output || "Research step omitted in fast mode.",
-    reviewer_notes: result.Reviewer?.output || "",
-    final_synthesis: result.Orchestrator?.output || `Workflow completed with ${providerLabel}.`,
-  };
 }
 
 function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback mode was used.") {
   const cleanGoal = clean(goal);
-  const flowOrder = buildFlowOrder(mode, USE_FAST_AGENT_SET);
+  const flowOrder = buildFlowOrder(mode);
 
   const result = {
     Orchestrator: {
-      output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work toward final delivery.`,
+      output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work across Planner, Research, Writer, and Reviewer.`,
       time: 220,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
-    ...(USE_FAST_AGENT_SET
-      ? {}
-      : {
-          Planner: {
-            output: `Execution plan for: ${cleanGoal}
-1. Interpret the goal clearly
-2. Break work into structured steps
+    Planner: {
+      output: `Execution plan for: ${cleanGoal}
+1. Interpret the goal
+2. Break it into structured steps
 3. Gather context and assumptions
 4. Draft the user-facing deliverable
 5. Review and refine`,
-            time: 480,
-            tokens: "simulated",
-            cost: "N/A",
-            status: "completed",
-          },
-          Research: {
-            output: `Context for: ${cleanGoal}
-- User expects a visible end result
+      time: 480,
+      tokens: "simulated",
+      cost: "N/A",
+      status: "completed",
+    },
+    Research: {
+      output: `Context for: ${cleanGoal}
+- The user expects a visible end result
 - Structure increases trust
-- Review keeps the answer aligned`,
-            time: 560,
-            tokens: "simulated",
-            cost: "N/A",
-            status: "completed",
-          },
-        }),
+- Review keeps the final answer aligned`,
+      time: 560,
+      tokens: "simulated",
+      cost: "N/A",
+      status: "completed",
+    },
     Writer: {
       output: `Created a structured deliverable for: ${cleanGoal}
 
@@ -312,11 +110,18 @@ The output is aligned, structured, and understandable.`,
       flowOrder,
     },
     result,
-    shared_memory: buildSharedMemory(cleanGoal, flowOrder, result, "template fallback"),
+    shared_memory: {
+      execution_context: `Goal: ${cleanGoal}`,
+      task_graph: flowOrder.join(" → "),
+      planner_output: result.Planner.output,
+      research_output: result.Research.output,
+      reviewer_notes: result.Reviewer.output,
+      final_synthesis: result.Orchestrator.output,
+    },
     goal_output: `Goal achieved for: ${cleanGoal}
 
-The system interpreted the request, drafted the output, and reviewed it before final delivery.`,
-    explanation: `This run used the template fallback. The orchestrator coordinated the workflow, the Writer produced the user-facing result, and the Reviewer validated quality.`,
+The system interpreted the request, planned the work, gathered context, drafted the output, and reviewed it before final delivery.`,
+    explanation: `This run used the template fallback. The orchestrator coordinated the workflow, the Planner structured the path, the Research agent gathered context, the Writer produced the user-facing result, and the Reviewer validated quality.`,
     totals: {
       totalTokens: "simulated",
       estimatedCost: "N/A",
@@ -324,24 +129,49 @@ The system interpreted the request, drafted the output, and reviewed it before f
   };
 }
 
-function estimateOpenAICost(usage) {
-  const inputTokens = usage?.input_tokens || 0;
-  const outputTokens = usage?.output_tokens || 0;
-  const totalTokens = usage?.total_tokens || inputTokens + outputTokens;
+async function callOpenAISingle(goal, apiKey, mode, instructionStyle) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  const estimatedCost =
-    (inputTokens / 1000) * OPENAI_INPUT_COST_PER_1K +
-    (outputTokens / 1000) * OPENAI_OUTPUT_COST_PER_1K;
+  const prompt = `
+You are a multi-agent workflow simulator.
 
-  return {
-    totalTokens,
-    estimatedCost,
-  };
+User goal:
+${goal}
+
+Orchestration mode:
+${mode}
+
+Instruction style:
+${instructionStyle}
+
+Style rule:
+${styleInstruction(instructionStyle)}
+
+Return STRICT JSON only with this exact shape:
+
+{
+  "orchestrator": "string",
+  "planner": "string",
+  "research": "string",
+  "writer": "string",
+  "reviewer": "string",
+  "goal_output": "string",
+  "explanation": "string"
 }
 
-async function callOpenAI(prompt, apiKey, label) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+Requirements:
+- "orchestrator": explain how the workflow is routed
+- "planner": 4 to 6 numbered steps
+- "research": assumptions, context, risks
+- "writer": final user-facing deliverable
+- "reviewer": short validation note and one improvement note
+- "goal_output": concise final outcome for the user
+- "explanation": explain what happened in the multi-agent workflow
+- no markdown
+- no code fences
+- valid JSON only
+`.trim();
 
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -360,99 +190,142 @@ async function callOpenAI(prompt, apiKey, label) {
     const payload = await response.json();
 
     if (!response.ok) {
-      throw new Error(payload?.error?.message || `${label} failed with ${response.status}`);
+      throw new Error(payload?.error?.message || `OpenAI failed with ${response.status}`);
     }
 
-    return payload;
+    const rawText =
+      typeof payload?.output_text === "string" && payload.output_text.trim()
+        ? payload.output_text.trim()
+        : "";
+
+    if (!rawText) {
+      throw new Error("OpenAI returned no text.");
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      throw new Error("OpenAI did not return valid JSON.");
+    }
+
+    const usage = payload?.usage || {};
+    const inputTokens = usage?.input_tokens || 0;
+    const outputTokens = usage?.output_tokens || 0;
+    const totalTokens = usage?.total_tokens || inputTokens + outputTokens;
+
+    const estimatedCost =
+      (inputTokens / 1000) * OPENAI_INPUT_COST_PER_1K +
+      (outputTokens / 1000) * OPENAI_OUTPUT_COST_PER_1K;
+
+    const result = {
+      Orchestrator: {
+        output: parsed.orchestrator || "No orchestrator output returned.",
+        time: 500,
+        tokens: totalTokens,
+        cost: `$${estimatedCost.toFixed(4)}`,
+        status: "completed",
+      },
+      Planner: {
+        output: parsed.planner || "No planner output returned.",
+        time: 500,
+        tokens: totalTokens,
+        cost: `$${estimatedCost.toFixed(4)}`,
+        status: "completed",
+      },
+      Research: {
+        output: parsed.research || "No research output returned.",
+        time: 500,
+        tokens: totalTokens,
+        cost: `$${estimatedCost.toFixed(4)}`,
+        status: "completed",
+      },
+      Writer: {
+        output: parsed.writer || "No writer output returned.",
+        time: 500,
+        tokens: totalTokens,
+        cost: `$${estimatedCost.toFixed(4)}`,
+        status: "completed",
+      },
+      Reviewer: {
+        output: parsed.reviewer || "No reviewer output returned.",
+        time: 500,
+        tokens: totalTokens,
+        cost: `$${estimatedCost.toFixed(4)}`,
+        status: "completed",
+      },
+    };
+
+    return {
+      source: "OpenAI",
+      providerStatus: {
+        openai: "working",
+        model: OPENAI_MODEL,
+      },
+      meta: {
+        mode,
+        instructionStyle,
+        flowOrder: buildFlowOrder(mode),
+      },
+      result,
+      shared_memory: {
+        execution_context: `Goal: ${goal}`,
+        task_graph: buildFlowOrder(mode).join(" → "),
+        planner_output: result.Planner.output,
+        research_output: result.Research.output,
+        reviewer_notes: result.Reviewer.output,
+        final_synthesis: result.Orchestrator.output,
+      },
+      goal_output: parsed.goal_output || parsed.writer || `Goal output generated for: ${goal}`,
+      explanation: parsed.explanation || "OpenAI generated a multi-agent workflow response.",
+      totals: {
+        totalTokens,
+        estimatedCost: `$${estimatedCost.toFixed(4)}`,
+      },
+    };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function extractResponseText(payload) {
-  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
-    return payload.output_text.trim();
-  }
-
-  try {
-    const parts = [];
-    for (const item of payload?.output || []) {
-      for (const content of item?.content || []) {
-        if (typeof content?.text === "string") {
-          parts.push(content.text);
-        }
-      }
-    }
-    return parts.join("\n").trim();
-  } catch {
-    return "";
-  }
-}
-
-async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
-  const prompts = buildPrompts(goal, mode, instructionStyle, USE_FAST_AGENT_SET);
-  const flowOrder = buildFlowOrder(mode, USE_FAST_AGENT_SET);
-
-  const result = {};
-  let totalTokens = 0;
-  let totalEstimatedCost = 0;
-
-  for (const [agentName, prompt] of Object.entries(prompts)) {
-    const started = Date.now();
-
-    const payload = await callOpenAI(prompt, apiKey, `OpenAI ${agentName}`);
-    const text = extractResponseText(payload) || `${agentName} completed the task.`;
-    const usage = estimateOpenAICost(payload?.usage || {});
-
-    result[agentName] = {
-      output: text,
-      time: Date.now() - started,
-      tokens: usage.totalTokens,
-      cost: `$${usage.estimatedCost.toFixed(4)}`,
-      status: "completed",
-    };
-
-    totalTokens += Number(usage.totalTokens || 0);
-    totalEstimatedCost += Number(usage.estimatedCost || 0);
-
-    await sleep(100);
-  }
-
-  return {
-    source: "OpenAI",
-    providerStatus: {
-      openai: "working",
-      model: OPENAI_MODEL,
-    },
-    meta: {
-      mode,
-      instructionStyle,
-      flowOrder,
-    },
-    result,
-    shared_memory: buildSharedMemory(goal, flowOrder, result, "OpenAI"),
-    goal_output: result.Writer?.output || `A final goal output was produced for: ${goal}`,
-    explanation: `This run used OpenAI successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Writer created the deliverable, and the Reviewer validated it.`,
-    totals: {
-      totalTokens,
-      estimatedCost: `$${totalEstimatedCost.toFixed(4)}`,
-    },
-  };
-}
-
 async function validateOpenAIKey(apiKey) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
   try {
-    const payload = await callOpenAI("Reply with only: OK", apiKey, "OpenAI validation");
-    const text = extractResponseText(payload);
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: "Reply with only: OK",
+      }),
+      signal: controller.signal,
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: payload?.error?.message || "OpenAI key validation failed.",
+      };
+    }
+
     return {
       ok: true,
-      message: text || "OK",
+      message: "OK",
     };
   } catch (error) {
     return {
       ok: false,
       message: error?.message || "OpenAI key validation failed.",
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -460,8 +333,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     openaiModel: OPENAI_MODEL,
-    fastMode: USE_FAST_AGENT_SET,
-    agentTimeoutMs: AGENT_TIMEOUT_MS,
+    requestTimeoutMs: REQUEST_TIMEOUT_MS,
   });
 });
 
@@ -476,10 +348,36 @@ app.get("/api/test-openai", async (req, res) => {
       });
     }
 
-    const payload = await callOpenAI("Reply with only: OPENAI_OK", serverOpenAIKey, "OpenAI test");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serverOpenAIKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: "Reply with only: OPENAI_OK",
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      return res.status(500).json({
+        ok: false,
+        message: payload?.error?.message || "OpenAI test failed.",
+      });
+    }
+
     return res.json({
       ok: true,
-      reply: extractResponseText(payload),
+      reply: payload?.output_text || "",
       usage: payload?.usage || {},
       model: OPENAI_MODEL,
     });
@@ -531,12 +429,11 @@ app.post("/api/run", async (req, res) => {
 
     if (userApiKey) {
       try {
-        const workflow = await runOpenAIWorkflow(goal, userApiKey, mode, instructionStyle);
+        const workflow = await callOpenAISingle(goal, userApiKey, mode, instructionStyle);
         workflow.source = "User OpenAI Key";
         return res.json(workflow);
       } catch (error) {
         console.error("User OpenAI workflow failed:", error?.message || error);
-
         return res.json(
           buildFallbackWorkflow(
             goal,
@@ -550,12 +447,11 @@ app.post("/api/run", async (req, res) => {
 
     if (serverOpenAIKey) {
       try {
-        const workflow = await runOpenAIWorkflow(goal, serverOpenAIKey, mode, instructionStyle);
+        const workflow = await callOpenAISingle(goal, serverOpenAIKey, mode, instructionStyle);
         workflow.source = "Server OpenAI Key";
         return res.json(workflow);
       } catch (error) {
         console.error("Server OpenAI workflow failed:", error?.message || error);
-
         return res.json(
           buildFallbackWorkflow(
             goal,
