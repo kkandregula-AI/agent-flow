@@ -7,8 +7,8 @@ async function run() {
   const output = document.getElementById("output");
   const explainer = document.getElementById("explainer");
 
-  flow.innerHTML = "<div class='node active'>Calling backend...</div>";
-  feed.innerHTML = "<div class='feed-item'>Waiting for response...</div>";
+  flow.innerHTML = "<div class='node active'>Starting workflow...</div>";
+  feed.innerHTML = "<div class='feed-item'>Running agents...</div>";
   output.innerHTML = "";
   explainer.innerHTML = "";
 
@@ -16,61 +16,79 @@ async function run() {
     const res = await fetch("/api/run", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         goal,
-        api_key: apiKey || null,
-        mode: "planner-first"
-      })
+        userApiKey: apiKey || null,
+      }),
     });
 
     const data = await res.json();
     console.log("API FULL RESPONSE:", data);
 
-    const agents = data.result || data.agents || {};
-    const names = Object.keys(agents);
+    const agents = data.result || {};
+    const agentNames = Object.keys(agents);
 
     flow.innerHTML = "";
     feed.innerHTML = "";
 
-    if (names.length === 0) {
+    if (agentNames.length === 0) {
       flow.innerHTML = "<div class='node active'>No agent data returned</div>";
-      feed.innerHTML = `<div class="feed-item"><pre>${JSON.stringify(data, null, 2)}</pre></div>`;
+      feed.innerHTML = `<div class="feed-item"><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></div>`;
       output.innerHTML = data.goal_output || "No goal output returned.";
       explainer.innerHTML = data.explanation || "No workflow explanation returned.";
       return;
     }
 
-    for (const name of names) {
-      const r = agents[name];
+    for (const agentName of agentNames) {
+      const agent = agents[agentName];
 
-      flow.innerHTML += `<div class="node active">${name}</div>`;
+      const node = document.createElement("div");
+      node.className = "node";
+      node.textContent = agentName;
+      flow.appendChild(node);
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      node.classList.add("active");
 
       feed.innerHTML += `
         <div class="feed-item">
-          <strong>${name}</strong><br>
-          ${String(r.output || "No output").replace(/\n/g, "<br>")}<br><br>
-          Time: ${r.time ?? "N/A"} ms<br>
-          Tokens: ${r.tokens ?? "N/A"}<br>
-          Cost: ${r.cost ?? "N/A"}
+          <strong>${escapeHtml(agentName)}</strong><br>
+          ${formatMultiline(agent.output || "No output")}<br><br>
+          ⏱ ${escapeHtml(String(agent.time ?? "N/A"))} ms<br>
+          Tokens: ${escapeHtml(String(agent.tokens ?? "N/A"))}<br>
+          Cost: ${escapeHtml(String(agent.cost ?? "N/A"))}
         </div>
       `;
     }
 
     output.innerHTML = `
       <strong>Goal Achieved Successfully</strong><br><br>
-      ${String(data.goal_output || "No goal output returned.").replace(/\n/g, "<br>")}
+      ${formatMultiline(data.goal_output || "No goal output returned.")}
     `;
 
-    explainer.innerHTML = String(
+    explainer.innerHTML = formatMultiline(
       data.explanation || "No workflow explanation returned."
-    ).replace(/\n/g, "<br>");
-  } catch (err) {
-    console.error(err);
-    flow.innerHTML = "<div class='node active'>Request failed</div>";
-    feed.innerHTML = `<div class="feed-item">${err.message}</div>`;
+    );
+  } catch (error) {
+    console.error("Frontend workflow error:", error);
+    flow.innerHTML = "<div class='node active'>Workflow failed</div>";
+    feed.innerHTML = `<div class="feed-item">Error: ${escapeHtml(error.message)}</div>`;
     output.innerHTML = "The workflow did not complete successfully.";
-    explainer.innerHTML = "Check console and network tab.";
+    explainer.innerHTML = "Please check the backend and browser console.";
   }
+}
+
+function formatMultiline(text) {
+  return escapeHtml(String(text)).replace(/\n/g, "<br>");
+}
+
+function escapeHtml(text) {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }

@@ -4,37 +4,43 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AgentFlow Studio</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=final1" />
 </head>
 <body>
-  <h1>AgentFlow Studio</h1>
+  <div class="page">
+    <h1>AgentFlow Studio</h1>
 
-  <div class="card">
-    <textarea id="goal">Create a PRD for privacy-first expense tracker</textarea>
-    <input id="apikey" placeholder="Optional OpenAI API Key" />
-    <button onclick="run()">Run Workflow</button>
+    <div class="grid">
+      <section class="card">
+        <textarea id="goal">Create a PRD for privacy-first expense tracker</textarea>
+        <input id="apikey" placeholder="Optional OpenAI API Key" />
+        <button onclick="run()">Run Workflow</button>
+      </section>
+
+      <section class="card">
+        <h3>Execution Flow</h3>
+        <div id="flow"></div>
+      </section>
+
+      <section class="card">
+        <h3>Live Feed</h3>
+        <div id="feed"></div>
+      </section>
+
+      <section class="card">
+        <h3>Goal Output</h3>
+        <div id="output"></div>
+      </section>
+
+      <section class="card">
+        <h3>Agentic Explanation</h3>
+        <div id="explainer"></div>
+      </section>
+    </div>
+
+    <footer>Built by Krishnamurthy Kandregula</footer>
   </div>
 
-  <div class="card">
-    <h3>Execution Flow</h3>
-    <div id="flow"></div>
-  </div>
-
-  <div class="card">
-    <h3>Live Feed</h3>
-    <div id="feed"></div>
-  </div>
-
-  <div class="card">
-    <h3>Goal Output</h3>
-    <div id="output"></div>
-  </div>
-
-  <div class="card">
-    <h3>Agentic Explanation</h3>
-    <div id="explainer"></div>
-  </div>
-
-  <script src="app.js?v=debug2"></script>
+  <script src="app.js?v=final1"></script>
 </body>
 </html>
