@@ -15,13 +15,11 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
 // Estimated pricing placeholders for display only.
 // Override these in Railway variables if you want different values.
 const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
 const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
-const GROQ_COST_PER_1K = Number(process.env.GROQ_COST_PER_1K || 0.00008);
 
 function clean(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
@@ -71,20 +69,6 @@ function estimateOpenAIUsage(usage) {
   return {
     inputTokens,
     outputTokens,
-    totalTokens,
-    estimatedCost,
-  };
-}
-
-function estimateGroqUsage(usage) {
-  const promptTokens = usage?.prompt_tokens ?? 0;
-  const completionTokens = usage?.completion_tokens ?? 0;
-  const totalTokens = usage?.total_tokens ?? (promptTokens + completionTokens);
-  const estimatedCost = (totalTokens / 1000) * GROQ_COST_PER_1K;
-
-  return {
-    promptTokens,
-    completionTokens,
     totalTokens,
     estimatedCost,
   };
@@ -315,7 +299,6 @@ Improvement note: if a live model is available, the system can generate more spe
     source: "Template Fallback",
     providerStatus: {
       openai: "not_used",
-      groq: "not_used",
       reason,
     },
     meta: {
@@ -374,7 +357,6 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
     source: "OpenAI",
     providerStatus: {
       openai: "working",
-      groq: "not_used",
       model: OPENAI_MODEL,
     },
     meta: {
@@ -388,95 +370,6 @@ async function runOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
       result.Writer?.output ||
       `A final goal output was produced for: ${goal}`,
     explanation: `This run used OpenAI successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Planner defined the path, the Research agent gathered context, the Writer created the deliverable, and the Reviewer validated it.`,
-    totals: {
-      totalTokens,
-      estimatedCost: `$${totalEstimatedCost.toFixed(4)}`,
-    },
-  };
-}
-
-async function runGroqWorkflow(goal, apiKey, mode, instructionStyle) {
-  const prompts = buildPrompts(goal, mode, instructionStyle);
-  const flowOrder = buildFlowOrder(mode);
-
-  const result = {};
-  let totalTokens = 0;
-  let totalEstimatedCost = 0;
-
-  for (const [agentName, prompt] of Object.entries(prompts)) {
-    const started = Date.now();
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
-
-    try {
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages: [
-            { role: "system", content: `You are the ${agentName} Agent.` },
-            { role: "user", content: prompt },
-          ],
-          temperature: 0.3,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(payload?.error?.message || payload?.message || `Groq request failed with ${response.status}`);
-      }
-
-      const text =
-        payload?.choices?.[0]?.message?.content?.trim() ||
-        `${agentName} completed the task.`;
-
-      const usage = estimateGroqUsage(payload?.usage);
-
-      result[agentName] = {
-        output: text,
-        time: Date.now() - started,
-        tokens: usage.totalTokens,
-        cost: `$${usage.estimatedCost.toFixed(4)}`,
-        status: "completed",
-      };
-
-      totalTokens += Number(usage.totalTokens || 0);
-      totalEstimatedCost += Number(usage.estimatedCost || 0);
-
-      await sleep(120);
-    } catch (error) {
-      clearTimeout(timeout);
-      throw new Error(`Groq failed at ${agentName}: ${error.message}`);
-    }
-  }
-
-  return {
-    source: "Groq",
-    providerStatus: {
-      openai: "not_used",
-      groq: "working",
-      model: GROQ_MODEL,
-    },
-    meta: {
-      mode,
-      instructionStyle,
-      flowOrder,
-    },
-    result,
-    shared_memory: buildSharedMemory(goal, flowOrder, result, "Groq"),
-    goal_output:
-      result.Writer?.output ||
-      `A final goal output was produced for: ${goal}`,
-    explanation: `This run used Groq successfully. The orchestrator routed work using ${mode} mode with ${instructionStyle} instruction style. The Planner defined the path, the Research agent gathered context, the Writer created the deliverable, and the Reviewer validated it.`,
     totals: {
       totalTokens,
       estimatedCost: `$${totalEstimatedCost.toFixed(4)}`,
@@ -508,60 +401,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     openaiModel: OPENAI_MODEL,
-    groqModel: GROQ_MODEL,
   });
-});
-
-app.get("/api/test-groq", async (req, res) => {
-  try {
-    const groqKey = clean(process.env.GROQ_API_KEY || "", 1000);
-
-    if (!groqKey) {
-      return res.status(400).json({
-        ok: false,
-        message: "No GROQ_API_KEY found in environment.",
-      });
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${groqKey}`,
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages: [{ role: "user", content: "Reply with only: GROQ_OK" }],
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        ok: false,
-        message: payload?.error?.message || payload?.message || "Groq request failed.",
-      });
-    }
-
-    return res.json({
-      ok: true,
-      model: GROQ_MODEL,
-      reply: payload?.choices?.[0]?.message?.content || "",
-      usage: payload?.usage || {},
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      message: error.message,
-    });
-  }
 });
 
 app.post("/api/validate-key", async (req, res) => {
@@ -592,7 +432,6 @@ app.post("/api/run", async (req, res) => {
     const instructionStyle = clean(req.body?.instructionStyle || "balanced", 50).toLowerCase();
 
     const serverOpenAIKey = clean(process.env.OPENAI_API_KEY || "", 1000);
-    const serverGroqKey = clean(process.env.GROQ_API_KEY || "", 1000);
 
     if (!goal) {
       return res.status(400).json({
@@ -611,6 +450,15 @@ app.post("/api/run", async (req, res) => {
         return res.json(workflow);
       } catch (error) {
         console.error("User OpenAI workflow failed:", error?.message || error);
+
+        return res.json(
+          buildFallbackWorkflow(
+            goal,
+            mode,
+            instructionStyle,
+            `User OpenAI key failed: ${error?.message || "Unknown error"}. Template fallback was used.`
+          )
+        );
       }
     }
 
@@ -621,23 +469,13 @@ app.post("/api/run", async (req, res) => {
         return res.json(workflow);
       } catch (error) {
         console.error("Server OpenAI workflow failed:", error?.message || error);
-      }
-    }
-
-    if (serverGroqKey) {
-      try {
-        const workflow = await runGroqWorkflow(goal, serverGroqKey, mode, instructionStyle);
-        workflow.source = "Server Groq Key";
-        return res.json(workflow);
-      } catch (error) {
-        console.error("Groq workflow failed:", error?.message || error);
 
         return res.json(
           buildFallbackWorkflow(
             goal,
             mode,
             instructionStyle,
-            `Groq failed: ${error?.message || "Unknown error"}. Template fallback was used.`
+            `Server OpenAI key failed: ${error?.message || "Unknown error"}. Template fallback was used.`
           )
         );
       }
@@ -648,7 +486,7 @@ app.post("/api/run", async (req, res) => {
         goal,
         mode,
         instructionStyle,
-        "No OpenAI or Groq key was available, so template fallback was used."
+        "No OpenAI key was available, so template fallback was used."
       )
     );
   } catch (error) {
