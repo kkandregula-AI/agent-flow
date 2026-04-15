@@ -26,25 +26,12 @@ async function run() {
   const executionMap = document.getElementById("executionMap");
 
   sourceBadge.textContent = "Running...";
-  providerNote.textContent = "Calling backend and executing workflow.";
+  providerNote.textContent = "Calling backend...";
   totalsBox.innerHTML = "";
-  flow.innerHTML = "<div class='flow-step active'>Starting workflow...</div>";
-  feed.innerHTML = "<div class='feed-item'>Calling /api/run...</div>";
+  flow.innerHTML = "<div class='flow-step active'>Loading...</div>";
+  feed.innerHTML = "<div class='feed-item'>Waiting for API response...</div>";
   output.innerHTML = "";
   explainer.innerHTML = "";
-
-  memoryExecution.textContent = "Running...";
-  memoryTaskGraph.textContent = "Running...";
-  memoryPlanner.textContent = "Waiting for planner output...";
-  memoryResearch.textContent = "Waiting for research output...";
-  memoryReviewer.textContent = "Waiting for reviewer notes...";
-  memorySynthesis.textContent = "Waiting for final synthesis...";
-
-  visualMode.textContent = mode;
-  visualStyle.textContent = instructionStyle;
-  visualOrder.textContent = "Building flow...";
-  if (visualizer) visualizer.innerHTML = "";
-  if (executionMap) executionMap.innerHTML = "";
 
   try {
     const res = await fetch("/api/run", {
@@ -73,7 +60,7 @@ async function run() {
       "Goal Output"
     ];
 
-    sourceBadge.textContent = data.source || "Done";
+    sourceBadge.textContent = "Done ✅";
 
     if (data.providerStatus?.openai === "working") {
       providerNote.textContent = `OpenAI is working${data.providerStatus.model ? ` using ${data.providerStatus.model}` : ""}.`;
@@ -106,80 +93,76 @@ async function run() {
 
     memoryExecution.textContent = data.shared_memory?.execution_context || `Goal: ${goal}`;
     memoryTaskGraph.textContent = data.shared_memory?.task_graph || flowOrder.join(" → ");
-
-    memoryPlanner.innerHTML = formatMultiline(
-      normalizeMemoryValue(data.shared_memory?.planner_output, agents.Planner?.output, "No planner output.")
-    );
-
-    memoryResearch.innerHTML = formatMultiline(
-      normalizeMemoryValue(data.shared_memory?.research_output, agents.Research?.output, "No research output.")
-    );
-
-    memoryReviewer.innerHTML = formatMultiline(
-      normalizeMemoryValue(data.shared_memory?.reviewer_notes, agents.Reviewer?.output, "No reviewer notes.")
-    );
-
-    memorySynthesis.innerHTML = formatMultiline(
-      normalizeMemoryValue(data.shared_memory?.final_synthesis, agents.Orchestrator?.output, "No final synthesis.")
-    );
+    memoryPlanner.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.planner_output, agents.Planner?.output, "No planner output."));
+    memoryResearch.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.research_output, agents.Research?.output, "No research output."));
+    memoryReviewer.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.reviewer_notes, agents.Reviewer?.output, "No reviewer notes."));
+    memorySynthesis.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.final_synthesis, agents.Orchestrator?.output, "No final synthesis."));
 
     visualMode.textContent = mode;
     visualStyle.textContent = instructionStyle;
     visualOrder.textContent = flowOrder.join(" → ");
 
-    renderVisualizer(flowOrder);
-    renderExecutionMap(flowOrder);
-
-    flow.innerHTML = "";
-    feed.innerHTML = "";
-
-    const agentNames = Object.keys(agents);
-
-    if (agentNames.length === 0) {
-      flow.innerHTML = "<div class='flow-step active'>No agent data returned</div>";
-      feed.innerHTML = `<div class="feed-item"><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></div>`;
-      output.innerHTML = data.goal_output || "No goal output returned.";
-      explainer.innerHTML = data.explanation || "No workflow explanation returned.";
-      return;
+    if (executionMap) {
+      executionMap.innerHTML = flowOrder.map(step => `
+        <div class="map-card active">
+          <div class="map-card-title">${escapeHtml(step)}</div>
+          <div class="map-card-sub">Completed</div>
+        </div>
+      `).join("");
     }
 
-    for (const stepName of flowOrder) {
-      if (stepName === "Goal Output") {
-        await pulseVisualizer(stepName);
-        continue;
+    if (visualizer) {
+      visualizer.innerHTML = flowOrder.map(step => `
+        <div class="visual-node active">
+          <div class="visual-kicker">${escapeHtml(step === "Goal Output" ? "Delivered Result" : "Agent Step")}</div>
+          <div class="visual-title">${escapeHtml(step)}</div>
+        </div>
+      `).join("");
+    }
+
+    flow.innerHTML = flowOrder.map(step => {
+      if (step === "Goal Output") {
+        return `
+          <div class="flow-step active">
+            <div class="flow-step-title">Goal Output</div>
+            <div class="flow-step-sub">Completed</div>
+          </div>
+        `;
       }
 
-      const agent = agents[stepName];
-      if (!agent) continue;
+      const agent = agents[step];
+      if (!agent) return "";
 
-      flow.innerHTML += `
+      return `
         <div class="flow-step active">
-          <div class="flow-step-title">${escapeHtml(stepName)}</div>
+          <div class="flow-step-title">${escapeHtml(step)}</div>
           <div class="flow-step-sub">${escapeHtml(String(agent.status || "completed"))}</div>
         </div>
       `;
+    }).join("");
 
-      await pulseVisualizer(stepName);
+    const feedHtml = [];
+    for (const step of flowOrder) {
+      if (step === "Goal Output") continue;
+      const agent = agents[step];
+      if (!agent) continue;
 
-      feed.innerHTML += `
+      feedHtml.push(`
         <div class="feed-item">
           <div class="feed-head">
-            <strong>${escapeHtml(stepName)}</strong>
+            <strong>${escapeHtml(step)}</strong>
             <span class="status-chip">${escapeHtml(String(agent.status || "completed"))}</span>
           </div>
-          <div class="feed-body">
-            ${formatMultiline(agent.output || "No output returned from backend.")}
-          </div>
+          <div class="feed-body">${formatMultiline(agent.output || "No output returned from backend.")}</div>
           <div class="feed-metrics">
             <span>⏱ ${escapeHtml(String(agent.time ?? "—"))} ms</span>
             <span>Tokens: ${escapeHtml(String(agent.tokens ?? "—"))}</span>
             <span>Cost: ${escapeHtml(String(agent.cost ?? "—"))}</span>
           </div>
         </div>
-      `;
+      `);
     }
-
-    await pulseVisualizer("Goal Output");
+    feed.innerHTML = feedHtml.join("") || "<div class='feed-item'>No agent feed returned.</div>";
 
     output.innerHTML = `
       <div class="goal-result">
@@ -196,8 +179,7 @@ async function run() {
   } catch (error) {
     console.error("Frontend workflow error:", error);
     sourceBadge.textContent = "Error";
-    providerNote.textContent = "The request failed before the workflow could complete.";
-    totalsBox.innerHTML = "";
+    providerNote.textContent = error.message;
     flow.innerHTML = "<div class='flow-step active'>Workflow failed</div>";
     feed.innerHTML = `<div class="feed-item">Error: ${escapeHtml(error.message)}</div>`;
     output.innerHTML = "The workflow did not complete successfully.";
@@ -278,9 +260,7 @@ function normalizeMemoryValue(value, fallback, emptyText) {
 function toText(value) {
   if (value == null) return "";
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value.map((item) => toText(item)).filter(Boolean).join("\n");
-  }
+  if (Array.isArray(value)) return value.map(item => toText(item)).filter(Boolean).join("\n");
   if (typeof value === "object") {
     try {
       return JSON.stringify(value, null, 2);
@@ -289,59 +269,6 @@ function toText(value) {
     }
   }
   return String(value);
-}
-
-function renderExecutionMap(flowOrder) {
-  const map = document.getElementById("executionMap");
-  if (!map) return;
-
-  map.innerHTML = "";
-
-  for (const step of flowOrder) {
-    map.innerHTML += `
-      <div class="map-card" id="map-${slug(step)}">
-        <div class="map-card-title">${escapeHtml(step)}</div>
-        <div class="map-card-sub">Waiting</div>
-      </div>
-    `;
-  }
-}
-
-function renderVisualizer(flowOrder) {
-  const visualizer = document.getElementById("visualizer");
-  if (!visualizer) return;
-
-  visualizer.innerHTML = "";
-
-  for (const step of flowOrder) {
-    visualizer.innerHTML += `
-      <div class="visual-node" id="visual-${slug(step)}">
-        <div class="visual-kicker">${escapeHtml(step === "Goal Output" ? "Delivered Result" : "Agent Step")}</div>
-        <div class="visual-title">${escapeHtml(step)}</div>
-      </div>
-    `;
-  }
-}
-
-async function pulseVisualizer(stepName) {
-  const visualNode = document.getElementById(`visual-${slug(stepName)}`);
-  const mapNode = document.getElementById(`map-${slug(stepName)}`);
-
-  if (visualNode) {
-    visualNode.classList.add("active");
-  }
-
-  if (mapNode) {
-    mapNode.classList.add("active");
-    const sub = mapNode.querySelector(".map-card-sub");
-    if (sub) sub.textContent = "Completed";
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 180));
-}
-
-function slug(text) {
-  return String(text).toLowerCase().replaceAll(" ", "-");
 }
 
 function formatMultiline(text) {
