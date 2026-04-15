@@ -12,14 +12,14 @@
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="styles.css?v=prd20260415a" />
+  <link rel="stylesheet" href="styles.css?v=eligibility20260415a" />
 </head>
 <body>
   <div class="page-shell">
     <header class="hero">
       <h1>AgentFlow Studio</h1>
       <p class="hero-subtitle">
-        Multi-agent orchestration playground with OpenAI execution and template fallback
+        Multi-agent orchestration playground with OpenAI execution, eligibility routing, and template fallback
       </p>
     </header>
 
@@ -52,6 +52,14 @@
             <option value="debate">Debate</option>
           </select>
 
+          <div class="info-box">
+            <strong>When to use each orchestration type</strong><br><br>
+            <strong>Planner First:</strong> Best for structured work like PRDs, strategies, and roadmaps.<br>
+            <strong>Sequential:</strong> Best when each stage depends on the previous one.<br>
+            <strong>Parallel:</strong> Best when multiple perspectives can be explored at the same time.<br>
+            <strong>Debate:</strong> Best for trade-offs, ambiguity, and competing options.
+          </div>
+
           <label for="instructionStyle" class="field-label">Instruction Style</label>
           <select id="instructionStyle">
             <option value="balanced">Balanced</option>
@@ -59,6 +67,20 @@
             <option value="detailed">Detailed</option>
             <option value="executive">Executive</option>
           </select>
+
+          <div class="info-box">
+            <strong>Instruction style notes</strong><br><br>
+            <strong>Balanced:</strong> Clear and practical default.<br>
+            <strong>Concise:</strong> Best for short, quick outputs.<br>
+            <strong>Detailed:</strong> Best for deeper explanation and fuller documentation.<br>
+            <strong>Executive:</strong> Best for polished stakeholder-ready output.
+          </div>
+
+          <div class="info-box">
+            <strong>Eligibility routing</strong><br><br>
+            This app uses <strong>multi-agent flow</strong> for complex work like PRDs, strategy, research, comparison, and planning.<br>
+            It uses <strong>single-agent flow</strong> for simple tasks like rewrite, explain, summarize, translate, or quick drafting.
+          </div>
 
           <label for="apikey" class="field-label">Optional OpenAI API Key</label>
           <input
@@ -74,7 +96,7 @@
 
           <div id="keyStatus" class="key-status neutral">No key checked yet.</div>
           <div id="providerNote" class="provider-note">
-            Provider order: User OpenAI Key → Server OpenAI Key → Template Fallback
+            Routing: Eligibility Test → Multi-Agent or Single-Agent → OpenAI or Template Fallback
           </div>
 
           <div id="totalsBox" class="totals-box"></div>
@@ -99,12 +121,13 @@
             <div><strong>Mode:</strong> <span id="visualMode">planner-first</span></div>
             <div><strong>Style:</strong> <span id="visualStyle">balanced</span></div>
             <div><strong>Order:</strong> <span id="visualOrder">—</span></div>
+            <div><strong>Execution Type:</strong> <span id="executionType">—</span></div>
           </div>
 
           <div id="visualizer" class="visualizer-grid"></div>
 
           <div class="visual-caption">
-            This shows how the orchestrator routes work across the agents and into the final goal output.
+            The app first checks whether the goal really benefits from multi-agent orchestration. If not, it routes to a simpler single-agent path.
           </div>
         </section>
 
@@ -163,8 +186,8 @@
           </div>
           <div id="output"></div>
           <div class="button-row download-row">
-            <button id="downloadTxtBtn" type="button" class="secondary-btn">Download PRD (.txt)</button>
-            <button id="downloadMdBtn" type="button" class="secondary-btn">Download PRD (.md)</button>
+            <button id="downloadTxtBtn" type="button" class="secondary-btn">Download Output (.txt)</button>
+            <button id="downloadMdBtn" type="button" class="secondary-btn">Download Output (.md)</button>
           </div>
         </section>
 
@@ -180,6 +203,6 @@
     <footer>Built by Krishnamurthy Kandregula</footer>
   </div>
 
-  <script src="app.js?v=prd20260415a"></script>
+  <script src="app.js?v=eligibility20260415a"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 let latestGoalOutput = "";
-let latestGoalTitle = "Generated_PRD";
+let latestGoalTitle = "Generated_Output";
 
 document.addEventListener("DOMContentLoaded", () => {
   const runBtn = document.getElementById("runBtn");
@@ -25,6 +25,7 @@ async function run() {
   const feed = document.getElementById("feed");
   const output = document.getElementById("output");
   const explainer = document.getElementById("explainer");
+  const executionType = document.getElementById("executionType");
 
   const memoryExecution = document.getElementById("memoryExecution");
   const memoryTaskGraph = document.getElementById("memoryTaskGraph");
@@ -45,6 +46,7 @@ async function run() {
   if (feed) feed.innerHTML = "<div class='feed-item'>Waiting for API response...</div>";
   if (output) output.innerHTML = "";
   if (explainer) explainer.innerHTML = "";
+  if (executionType) executionType.textContent = "Checking eligibility...";
 
   latestGoalOutput = "";
   latestGoalTitle = buildFileName(goal);
@@ -63,7 +65,7 @@ async function run() {
   if (executionMap) executionMap.innerHTML = "";
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
 
   try {
     const res = await fetch("/api/run", {
@@ -96,7 +98,7 @@ async function run() {
     const agents = normalizeAgents(data.result || {});
     const flowOrder = Array.isArray(data.meta?.flowOrder)
       ? data.meta.flowOrder
-      : ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
+      : ["Single Agent", "Goal Output"];
 
     sourceBadge.textContent = "Done ✅";
 
@@ -106,15 +108,29 @@ async function run() {
       providerNote.textContent = data.providerStatus?.reason || "Template fallback was used.";
     }
 
+    if (executionType) {
+      executionType.textContent = data.meta?.executionType || "unknown";
+    }
+
     totalsBox.innerHTML = `
       <div class="metric-row">
         <div class="metric-card">
           <div class="metric-label">Mode Used</div>
-          <div class="metric-value">${escapeHtml(String(mode))}</div>
+          <div class="metric-value">${escapeHtml(String(data.meta?.mode || mode))}</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Instruction Style</div>
-          <div class="metric-value">${escapeHtml(String(instructionStyle))}</div>
+          <div class="metric-value">${escapeHtml(String(data.meta?.instructionStyle || instructionStyle))}</div>
+        </div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-card">
+          <div class="metric-label">Execution Type</div>
+          <div class="metric-value">${escapeHtml(String(data.meta?.executionType || "unknown"))}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Eligible for Multi-Agent</div>
+          <div class="metric-value">${escapeHtml(String(data.meta?.eligible ?? "unknown"))}</div>
         </div>
       </div>
       <div class="metric-row">
@@ -139,30 +155,30 @@ async function run() {
 
     if (memoryPlanner) {
       memoryPlanner.innerHTML = formatMultiline(
-        normalizeMemoryValue(data.shared_memory?.planner_output, agents.Planner?.output, "No planner output.")
+        normalizeMemoryValue(data.shared_memory?.planner_output, agents.Planner?.output, "Not used in this flow.")
       );
     }
 
     if (memoryResearch) {
       memoryResearch.innerHTML = formatMultiline(
-        normalizeMemoryValue(data.shared_memory?.research_output, agents.Research?.output, "No research output.")
+        normalizeMemoryValue(data.shared_memory?.research_output, agents.Research?.output, "Not used in this flow.")
       );
     }
 
     if (memoryReviewer) {
       memoryReviewer.innerHTML = formatMultiline(
-        normalizeMemoryValue(data.shared_memory?.reviewer_notes, agents.Reviewer?.output, "No reviewer notes.")
+        normalizeMemoryValue(data.shared_memory?.reviewer_notes, agents.Reviewer?.output, "Not used in this flow.")
       );
     }
 
     if (memorySynthesis) {
       memorySynthesis.innerHTML = formatMultiline(
-        normalizeMemoryValue(data.shared_memory?.final_synthesis, agents.Orchestrator?.output, "No final synthesis.")
+        normalizeMemoryValue(data.shared_memory?.final_synthesis, agents.Orchestrator?.output || agents["Single Agent"]?.output, "No final synthesis.")
       );
     }
 
-    if (visualMode) visualMode.textContent = mode;
-    if (visualStyle) visualStyle.textContent = instructionStyle;
+    if (visualMode) visualMode.textContent = data.meta?.mode || mode;
+    if (visualStyle) visualStyle.textContent = data.meta?.instructionStyle || instructionStyle;
     if (visualOrder) visualOrder.textContent = flowOrder.join(" → ");
 
     if (executionMap) {
@@ -177,7 +193,7 @@ async function run() {
     if (visualizer) {
       visualizer.innerHTML = flowOrder.map(step => `
         <div class="visual-node active">
-          <div class="visual-kicker">${escapeHtml(step === "Goal Output" ? "Delivered Result" : "Agent Step")}</div>
+          <div class="visual-kicker">${escapeHtml(step === "Goal Output" ? "Delivered Result" : "Execution Step")}</div>
           <div class="visual-title">${escapeHtml(step)}</div>
         </div>
       `).join("");
@@ -207,16 +223,16 @@ async function run() {
         `);
       }
 
-      feed.innerHTML = feedHtml.join("") || "<div class='feed-item'>No agent feed returned.</div>";
+      feed.innerHTML = feedHtml.join("") || "<div class='feed-item'>No execution feed returned.</div>";
     }
 
-    const finalGoalOutput = data.goal_output || agents.Writer?.output || "No goal output returned.";
+    const finalGoalOutput = data.goal_output || agents.Writer?.output || agents["Single Agent"]?.output || "No output returned.";
     latestGoalOutput = toText(finalGoalOutput);
 
     if (output) {
       output.innerHTML = `
         <div class="goal-result">
-          <div class="goal-title">Generated PRD</div>
+          <div class="goal-title">Generated Output</div>
           <div class="goal-body">${formatMultiline(finalGoalOutput)}</div>
         </div>
       `;
@@ -225,7 +241,7 @@ async function run() {
     if (explainer) {
       explainer.innerHTML = `
         <div class="explain-box">
-          ${formatMultiline(data.explanation || agents.Orchestrator?.output || "No workflow explanation returned.")}
+          ${formatMultiline(data.explanation || agents.Orchestrator?.output || agents["Single Agent"]?.output || "No workflow explanation returned.")}
         </div>
       `;
     }
@@ -235,7 +251,7 @@ async function run() {
     console.error("Frontend workflow error:", error);
     sourceBadge.textContent = "Error ❌";
     providerNote.textContent = error.name === "AbortError"
-      ? "Browser request timed out after 15 seconds."
+      ? "Browser request timed out after 20 seconds."
       : error.message;
 
     if (feed) {
@@ -291,7 +307,7 @@ async function validateKey() {
 
 function downloadGoalOutput(ext) {
   if (!latestGoalOutput) {
-    alert("Please generate the PRD first.");
+    alert("Please generate the output first.");
     return;
   }
 
@@ -310,11 +326,11 @@ function downloadGoalOutput(ext) {
 }
 
 function buildFileName(goal) {
-  const base = toText(goal).trim() || "Generated_PRD";
+  const base = toText(goal).trim() || "Generated_Output";
   return base
     .replace(/[^\w\s-]/g, "")
     .replace(/\s+/g, "_")
-    .slice(0, 60) || "Generated_PRD";
+    .slice(0, 60) || "Generated_Output";
 }
 
 function normalizeAgents(rawAgents) {
