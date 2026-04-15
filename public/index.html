@@ -4,19 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AgentFlow Studio</title>
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="styles.css?v=openai-template-1" />
+
+  <link rel="stylesheet" href="styles.css?v=fix20260415c" />
 </head>
 <body>
   <div class="page-shell">
     <header class="hero">
       <h1>AgentFlow Studio</h1>
-      <p class="hero-subtitle">Multi-agent orchestration playground with OpenAI execution and template fallback</p>
+      <p class="hero-subtitle">
+        Multi-agent orchestration playground with OpenAI execution and template fallback
+      </p>
     </header>
 
     <main class="dashboard">
@@ -57,15 +61,22 @@
           </select>
 
           <label for="apikey" class="field-label">Optional OpenAI API Key</label>
-          <input id="apikey" type="password" placeholder="Paste key to use real OpenAI execution" />
+          <input
+            id="apikey"
+            type="password"
+            placeholder="Paste key to use real OpenAI execution"
+          />
 
           <div class="button-row">
-            <button onclick="run()">Run Workflow</button>
-            <button class="secondary-btn" onclick="validateKey()">Check OpenAI Key</button>
+            <button id="runBtn" type="button">Run Workflow</button>
+            <button id="validateBtn" class="secondary-btn" type="button">Check OpenAI Key</button>
           </div>
 
           <div id="keyStatus" class="key-status neutral">No key checked yet.</div>
-          <div id="providerNote" class="provider-note">Provider order: User OpenAI Key → Server OpenAI Key → Template Fallback</div>
+          <div id="providerNote" class="provider-note">
+            Provider order: User OpenAI Key → Server OpenAI Key → Template Fallback
+          </div>
+
           <div id="totalsBox" class="totals-box"></div>
         </section>
       </aside>
@@ -81,7 +92,7 @@
         <section class="card">
           <div class="card-title-row">
             <h2>Dynamic Flow Visualizer</h2>
-            <span class="source-badge">Live agent pulse</span>
+            <span class="source-badge">Live view</span>
           </div>
 
           <div class="visual-meta">
@@ -91,8 +102,9 @@
           </div>
 
           <div id="visualizer" class="visualizer-grid"></div>
+
           <div class="visual-caption">
-            The pulse highlights which part of the system is active. The orchestrator remains the control layer while specialist agents perform focused work.
+            This shows how the orchestrator routes work across the agents and into the final goal output.
           </div>
         </section>
 
@@ -113,7 +125,9 @@
           <div class="memory-grid">
             <div class="memory-card">
               <div class="memory-label">Execution Context</div>
-              <div id="memoryExecution" class="memory-value">Run a workflow to see task plans, intermediate outputs, and final synthesis.</div>
+              <div id="memoryExecution" class="memory-value">
+                Run a workflow to see intermediate outputs and synthesis.
+              </div>
             </div>
 
             <div class="memory-card">
@@ -162,6 +176,6 @@
     <footer>Built by Krishnamurthy Kandregula</footer>
   </div>
 
-  <script src="app.js?v=openai-template-1"></script>
+  <script src="app.js?v=fix20260415c"></script>
 </body>
 </html>

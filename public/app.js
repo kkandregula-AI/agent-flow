@@ -1,3 +1,16 @@
+document.addEventListener("DOMContentLoaded", () => {
+  const runBtn = document.getElementById("runBtn");
+  const validateBtn = document.getElementById("validateBtn");
+
+  if (runBtn) {
+    runBtn.addEventListener("click", run);
+  }
+
+  if (validateBtn) {
+    validateBtn.addEventListener("click", validateKey);
+  }
+});
+
 async function run() {
   const goal = document.getElementById("goal").value.trim();
   const apiKey = document.getElementById("apikey").value.trim();
@@ -28,10 +41,27 @@ async function run() {
   sourceBadge.textContent = "Running...";
   providerNote.textContent = "Calling backend...";
   totalsBox.innerHTML = "";
-  flow.innerHTML = "<div class='flow-step active'>Loading...</div>";
-  feed.innerHTML = "<div class='feed-item'>Waiting for API response...</div>";
-  output.innerHTML = "";
-  explainer.innerHTML = "";
+
+  if (flow) flow.innerHTML = "<div class='flow-step active'>Loading...</div>";
+  if (feed) feed.innerHTML = "<div class='feed-item'>Waiting for API response...</div>";
+  if (output) output.innerHTML = "";
+  if (explainer) explainer.innerHTML = "";
+
+  if (memoryExecution) memoryExecution.textContent = "Running...";
+  if (memoryTaskGraph) memoryTaskGraph.textContent = "Running...";
+  if (memoryPlanner) memoryPlanner.textContent = "Waiting for planner output...";
+  if (memoryResearch) memoryResearch.textContent = "Waiting for research output...";
+  if (memoryReviewer) memoryReviewer.textContent = "Waiting for reviewer notes...";
+  if (memorySynthesis) memorySynthesis.textContent = "Waiting for final synthesis...";
+
+  if (visualMode) visualMode.textContent = mode;
+  if (visualStyle) visualStyle.textContent = instructionStyle;
+  if (visualOrder) visualOrder.textContent = "Building flow...";
+  if (visualizer) visualizer.innerHTML = "";
+  if (executionMap) executionMap.innerHTML = "";
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
   try {
     const res = await fetch("/api/run", {
@@ -44,21 +74,27 @@ async function run() {
         userApiKey: apiKey || null,
         mode,
         instructionStyle
-      })
+      }),
+      signal: controller.signal
     });
 
-    const data = await res.json();
+    clearTimeout(timeoutId);
+
+    const text = await res.text();
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Backend returned non-JSON response: ${text.slice(0, 300)}`);
+    }
+
     console.log("API FULL RESPONSE:", data);
 
     const agents = normalizeAgents(data.result || {});
-    const flowOrder = data.meta?.flowOrder || [
-      "Orchestrator",
-      "Planner",
-      "Research",
-      "Writer",
-      "Reviewer",
-      "Goal Output"
-    ];
+    const flowOrder = Array.isArray(data.meta?.flowOrder)
+      ? data.meta.flowOrder
+      : ["Orchestrator", "Planner", "Research", "Writer", "Reviewer", "Goal Output"];
 
     sourceBadge.textContent = "Done ✅";
 
@@ -91,16 +127,41 @@ async function run() {
       </div>
     `;
 
-    memoryExecution.textContent = data.shared_memory?.execution_context || `Goal: ${goal}`;
-    memoryTaskGraph.textContent = data.shared_memory?.task_graph || flowOrder.join(" → ");
-    memoryPlanner.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.planner_output, agents.Planner?.output, "No planner output."));
-    memoryResearch.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.research_output, agents.Research?.output, "No research output."));
-    memoryReviewer.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.reviewer_notes, agents.Reviewer?.output, "No reviewer notes."));
-    memorySynthesis.innerHTML = formatMultiline(normalizeMemoryValue(data.shared_memory?.final_synthesis, agents.Orchestrator?.output, "No final synthesis."));
+    if (memoryExecution) {
+      memoryExecution.textContent = data.shared_memory?.execution_context || `Goal: ${goal}`;
+    }
 
-    visualMode.textContent = mode;
-    visualStyle.textContent = instructionStyle;
-    visualOrder.textContent = flowOrder.join(" → ");
+    if (memoryTaskGraph) {
+      memoryTaskGraph.textContent = data.shared_memory?.task_graph || flowOrder.join(" → ");
+    }
+
+    if (memoryPlanner) {
+      memoryPlanner.innerHTML = formatMultiline(
+        normalizeMemoryValue(data.shared_memory?.planner_output, agents.Planner?.output, "No planner output.")
+      );
+    }
+
+    if (memoryResearch) {
+      memoryResearch.innerHTML = formatMultiline(
+        normalizeMemoryValue(data.shared_memory?.research_output, agents.Research?.output, "No research output.")
+      );
+    }
+
+    if (memoryReviewer) {
+      memoryReviewer.innerHTML = formatMultiline(
+        normalizeMemoryValue(data.shared_memory?.reviewer_notes, agents.Reviewer?.output, "No reviewer notes.")
+      );
+    }
+
+    if (memorySynthesis) {
+      memorySynthesis.innerHTML = formatMultiline(
+        normalizeMemoryValue(data.shared_memory?.final_synthesis, agents.Orchestrator?.output, "No final synthesis.")
+      );
+    }
+
+    if (visualMode) visualMode.textContent = mode;
+    if (visualStyle) visualStyle.textContent = instructionStyle;
+    if (visualOrder) visualOrder.textContent = flowOrder.join(" → ");
 
     if (executionMap) {
       executionMap.innerHTML = flowOrder.map(step => `
@@ -120,70 +181,96 @@ async function run() {
       `).join("");
     }
 
-    flow.innerHTML = flowOrder.map(step => {
-      if (step === "Goal Output") {
+    if (flow) {
+      flow.innerHTML = flowOrder.map(step => {
+        if (step === "Goal Output") {
+          return `
+            <div class="flow-step active">
+              <div class="flow-step-title">Goal Output</div>
+              <div class="flow-step-sub">Completed</div>
+            </div>
+          `;
+        }
+
+        const agent = agents[step];
+        if (!agent) return "";
+
         return `
           <div class="flow-step active">
-            <div class="flow-step-title">Goal Output</div>
-            <div class="flow-step-sub">Completed</div>
+            <div class="flow-step-title">${escapeHtml(step)}</div>
+            <div class="flow-step-sub">${escapeHtml(String(agent.status || "completed"))}</div>
           </div>
         `;
+      }).join("");
+    }
+
+    if (feed) {
+      const feedHtml = [];
+
+      for (const step of flowOrder) {
+        if (step === "Goal Output") continue;
+        const agent = agents[step];
+        if (!agent) continue;
+
+        feedHtml.push(`
+          <div class="feed-item">
+            <div class="feed-head">
+              <strong>${escapeHtml(step)}</strong>
+              <span class="status-chip">${escapeHtml(String(agent.status || "completed"))}</span>
+            </div>
+            <div class="feed-body">${formatMultiline(agent.output || "No output returned from backend.")}</div>
+            <div class="feed-metrics">
+              <span>⏱ ${escapeHtml(String(agent.time ?? "—"))} ms</span>
+              <span>Tokens: ${escapeHtml(String(agent.tokens ?? "—"))}</span>
+              <span>Cost: ${escapeHtml(String(agent.cost ?? "—"))}</span>
+            </div>
+          </div>
+        `);
       }
 
-      const agent = agents[step];
-      if (!agent) return "";
+      feed.innerHTML = feedHtml.join("") || "<div class='feed-item'>No agent feed returned.</div>";
+    }
 
-      return `
-        <div class="flow-step active">
-          <div class="flow-step-title">${escapeHtml(step)}</div>
-          <div class="flow-step-sub">${escapeHtml(String(agent.status || "completed"))}</div>
+    if (output) {
+      output.innerHTML = `
+        <div class="goal-result">
+          <div class="goal-title">Goal Achieved Output</div>
+          <div class="goal-body">${formatMultiline(data.goal_output || agents.Writer?.output || "No goal output returned.")}</div>
         </div>
       `;
-    }).join("");
-
-    const feedHtml = [];
-    for (const step of flowOrder) {
-      if (step === "Goal Output") continue;
-      const agent = agents[step];
-      if (!agent) continue;
-
-      feedHtml.push(`
-        <div class="feed-item">
-          <div class="feed-head">
-            <strong>${escapeHtml(step)}</strong>
-            <span class="status-chip">${escapeHtml(String(agent.status || "completed"))}</span>
-          </div>
-          <div class="feed-body">${formatMultiline(agent.output || "No output returned from backend.")}</div>
-          <div class="feed-metrics">
-            <span>⏱ ${escapeHtml(String(agent.time ?? "—"))} ms</span>
-            <span>Tokens: ${escapeHtml(String(agent.tokens ?? "—"))}</span>
-            <span>Cost: ${escapeHtml(String(agent.cost ?? "—"))}</span>
-          </div>
-        </div>
-      `);
     }
-    feed.innerHTML = feedHtml.join("") || "<div class='feed-item'>No agent feed returned.</div>";
 
-    output.innerHTML = `
-      <div class="goal-result">
-        <div class="goal-title">Goal Achieved Output</div>
-        <div class="goal-body">${formatMultiline(data.goal_output || agents.Writer?.output || "No goal output returned.")}</div>
-      </div>
-    `;
-
-    explainer.innerHTML = `
-      <div class="explain-box">
-        ${formatMultiline(data.explanation || agents.Orchestrator?.output || "No workflow explanation returned.")}
-      </div>
-    `;
+    if (explainer) {
+      explainer.innerHTML = `
+        <div class="explain-box">
+          ${formatMultiline(data.explanation || agents.Orchestrator?.output || "No workflow explanation returned.")}
+        </div>
+      `;
+    }
   } catch (error) {
+    clearTimeout(timeoutId);
+
     console.error("Frontend workflow error:", error);
-    sourceBadge.textContent = "Error";
-    providerNote.textContent = error.message;
-    flow.innerHTML = "<div class='flow-step active'>Workflow failed</div>";
-    feed.innerHTML = `<div class="feed-item">Error: ${escapeHtml(error.message)}</div>`;
-    output.innerHTML = "The workflow did not complete successfully.";
-    explainer.innerHTML = "Please check the backend and browser console.";
+    sourceBadge.textContent = "Error ❌";
+    providerNote.textContent = error.name === "AbortError"
+      ? "Browser request timed out after 15 seconds."
+      : error.message;
+
+    if (flow) {
+      flow.innerHTML = "<div class='flow-step active'>Workflow failed</div>";
+    }
+
+    if (feed) {
+      feed.innerHTML = `<div class="feed-item">Error: ${escapeHtml(error.message)}</div>`;
+    }
+
+    if (output) {
+      output.innerHTML = "The workflow did not complete successfully.";
+    }
+
+    if (explainer) {
+      explainer.innerHTML = "Please check the backend and browser console.";
+    }
   }
 }
 
