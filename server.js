@@ -14,9 +14,10 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 12000);
+
 const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
 const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 20000);
 
 function clean(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
@@ -129,10 +130,72 @@ The system interpreted the request, planned the work, gathered context, drafted 
   };
 }
 
-async function callOpenAISingle(goal, apiKey, mode, instructionStyle) {
+function estimateOpenAICost(usage) {
+  const inputTokens = usage?.input_tokens || 0;
+  const outputTokens = usage?.output_tokens || 0;
+  const totalTokens = usage?.total_tokens || inputTokens + outputTokens;
+
+  const estimatedCost =
+    (inputTokens / 1000) * OPENAI_INPUT_COST_PER_1K +
+    (outputTokens / 1000) * OPENAI_OUTPUT_COST_PER_1K;
+
+  return {
+    totalTokens,
+    estimatedCost,
+  };
+}
+
+async function callOpenAI(prompt, apiKey) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: prompt,
+      }),
+      signal: controller.signal,
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || `OpenAI failed with ${response.status}`);
+    }
+
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractResponseText(payload) {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  try {
+    const parts = [];
+    for (const item of payload?.output || []) {
+      for (const content of item?.content || []) {
+        if (typeof content?.text === "string") {
+          parts.push(content.text);
+        }
+      }
+    }
+    return parts.join("\n").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function buildOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
   const prompt = `
 You are a multi-agent workflow simulator.
 
@@ -173,159 +236,103 @@ Requirements:
 - valid JSON only
 `.trim();
 
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: prompt,
-      }),
-      signal: controller.signal,
-    });
+  const payload = await callOpenAI(prompt, apiKey);
+  const rawText = extractResponseText(payload);
 
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload?.error?.message || `OpenAI failed with ${response.status}`);
-    }
-
-    const rawText =
-      typeof payload?.output_text === "string" && payload.output_text.trim()
-        ? payload.output_text.trim()
-        : "";
-
-    if (!rawText) {
-      throw new Error("OpenAI returned no text.");
-    }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      throw new Error("OpenAI did not return valid JSON.");
-    }
-
-    const usage = payload?.usage || {};
-    const inputTokens = usage?.input_tokens || 0;
-    const outputTokens = usage?.output_tokens || 0;
-    const totalTokens = usage?.total_tokens || inputTokens + outputTokens;
-
-    const estimatedCost =
-      (inputTokens / 1000) * OPENAI_INPUT_COST_PER_1K +
-      (outputTokens / 1000) * OPENAI_OUTPUT_COST_PER_1K;
-
-    const result = {
-      Orchestrator: {
-        output: parsed.orchestrator || "No orchestrator output returned.",
-        time: 500,
-        tokens: totalTokens,
-        cost: `$${estimatedCost.toFixed(4)}`,
-        status: "completed",
-      },
-      Planner: {
-        output: parsed.planner || "No planner output returned.",
-        time: 500,
-        tokens: totalTokens,
-        cost: `$${estimatedCost.toFixed(4)}`,
-        status: "completed",
-      },
-      Research: {
-        output: parsed.research || "No research output returned.",
-        time: 500,
-        tokens: totalTokens,
-        cost: `$${estimatedCost.toFixed(4)}`,
-        status: "completed",
-      },
-      Writer: {
-        output: parsed.writer || "No writer output returned.",
-        time: 500,
-        tokens: totalTokens,
-        cost: `$${estimatedCost.toFixed(4)}`,
-        status: "completed",
-      },
-      Reviewer: {
-        output: parsed.reviewer || "No reviewer output returned.",
-        time: 500,
-        tokens: totalTokens,
-        cost: `$${estimatedCost.toFixed(4)}`,
-        status: "completed",
-      },
-    };
-
-    return {
-      source: "OpenAI",
-      providerStatus: {
-        openai: "working",
-        model: OPENAI_MODEL,
-      },
-      meta: {
-        mode,
-        instructionStyle,
-        flowOrder: buildFlowOrder(mode),
-      },
-      result,
-      shared_memory: {
-        execution_context: `Goal: ${goal}`,
-        task_graph: buildFlowOrder(mode).join(" → "),
-        planner_output: result.Planner.output,
-        research_output: result.Research.output,
-        reviewer_notes: result.Reviewer.output,
-        final_synthesis: result.Orchestrator.output,
-      },
-      goal_output: parsed.goal_output || parsed.writer || `Goal output generated for: ${goal}`,
-      explanation: parsed.explanation || "OpenAI generated a multi-agent workflow response.",
-      totals: {
-        totalTokens,
-        estimatedCost: `$${estimatedCost.toFixed(4)}`,
-      },
-    };
-  } finally {
-    clearTimeout(timeout);
+  if (!rawText) {
+    throw new Error("OpenAI returned no text.");
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    throw new Error("OpenAI did not return valid JSON.");
+  }
+
+  const usage = estimateOpenAICost(payload?.usage || {});
+  const flowOrder = buildFlowOrder(mode);
+
+  const result = {
+    Orchestrator: {
+      output: parsed.orchestrator || "No orchestrator output returned.",
+      time: 500,
+      tokens: usage.totalTokens,
+      cost: `$${usage.estimatedCost.toFixed(4)}`,
+      status: "completed",
+    },
+    Planner: {
+      output: parsed.planner || "No planner output returned.",
+      time: 500,
+      tokens: usage.totalTokens,
+      cost: `$${usage.estimatedCost.toFixed(4)}`,
+      status: "completed",
+    },
+    Research: {
+      output: parsed.research || "No research output returned.",
+      time: 500,
+      tokens: usage.totalTokens,
+      cost: `$${usage.estimatedCost.toFixed(4)}`,
+      status: "completed",
+    },
+    Writer: {
+      output: parsed.writer || "No writer output returned.",
+      time: 500,
+      tokens: usage.totalTokens,
+      cost: `$${usage.estimatedCost.toFixed(4)}`,
+      status: "completed",
+    },
+    Reviewer: {
+      output: parsed.reviewer || "No reviewer output returned.",
+      time: 500,
+      tokens: usage.totalTokens,
+      cost: `$${usage.estimatedCost.toFixed(4)}`,
+      status: "completed",
+    },
+  };
+
+  return {
+    source: "OpenAI",
+    providerStatus: {
+      openai: "working",
+      model: OPENAI_MODEL,
+    },
+    meta: {
+      mode,
+      instructionStyle,
+      flowOrder,
+    },
+    result,
+    shared_memory: {
+      execution_context: `Goal: ${goal}`,
+      task_graph: flowOrder.join(" → "),
+      planner_output: result.Planner.output,
+      research_output: result.Research.output,
+      reviewer_notes: result.Reviewer.output,
+      final_synthesis: result.Orchestrator.output,
+    },
+    goal_output: parsed.goal_output || parsed.writer || `Goal output generated for: ${goal}`,
+    explanation: parsed.explanation || "OpenAI generated a multi-agent workflow response.",
+    totals: {
+      totalTokens: usage.totalTokens,
+      estimatedCost: `$${usage.estimatedCost.toFixed(4)}`,
+    },
+  };
 }
 
 async function validateOpenAIKey(apiKey) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
-
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: "Reply with only: OK",
-      }),
-      signal: controller.signal,
-    });
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        message: payload?.error?.message || "OpenAI key validation failed.",
-      };
-    }
-
+    const payload = await callOpenAI("Reply with only: OK", apiKey);
+    const text = extractResponseText(payload);
     return {
       ok: true,
-      message: "OK",
+      message: text || "OK",
     };
   } catch (error) {
     return {
       ok: false,
       message: error?.message || "OpenAI key validation failed.",
     };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -348,36 +355,11 @@ app.get("/api/test-openai", async (req, res) => {
       });
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${serverOpenAIKey}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: "Reply with only: OPENAI_OK",
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      return res.status(500).json({
-        ok: false,
-        message: payload?.error?.message || "OpenAI test failed.",
-      });
-    }
+    const payload = await callOpenAI("Reply with only: OPENAI_OK", serverOpenAIKey);
 
     return res.json({
       ok: true,
-      reply: payload?.output_text || "",
+      reply: extractResponseText(payload),
       usage: payload?.usage || {},
       model: OPENAI_MODEL,
     });
@@ -427,64 +409,53 @@ app.post("/api/run", async (req, res) => {
       });
     }
 
-    if (userApiKey) {
-      try {
-        const workflow = await callOpenAISingle(goal, userApiKey, mode, instructionStyle);
-        workflow.source = "User OpenAI Key";
-        return res.json(workflow);
-      } catch (error) {
-        console.error("User OpenAI workflow failed:", error?.message || error);
-        return res.json(
+    const apiKeyToUse = userApiKey || serverOpenAIKey;
+
+    if (!apiKeyToUse) {
+      return res.json(
+        buildFallbackWorkflow(
+          goal,
+          mode,
+          instructionStyle,
+          "No OpenAI key was available, so template fallback was used."
+        )
+      );
+    }
+
+    const workflowPromise = buildOpenAIWorkflow(goal, apiKeyToUse, mode, instructionStyle);
+
+    const timeoutFallbackPromise = new Promise((resolve) => {
+      setTimeout(() => {
+        resolve(
           buildFallbackWorkflow(
             goal,
             mode,
             instructionStyle,
-            `User OpenAI key failed: ${error?.message || "Unknown error"}. Template fallback was used.`
+            `OpenAI workflow exceeded ${REQUEST_TIMEOUT_MS} ms, so template fallback was used.`
           )
         );
-      }
+      }, REQUEST_TIMEOUT_MS + 1000);
+    });
+
+    const workflow = await Promise.race([workflowPromise, timeoutFallbackPromise]);
+
+    if (userApiKey && workflow.source === "OpenAI") {
+      workflow.source = "User OpenAI Key";
+    } else if (serverOpenAIKey && workflow.source === "OpenAI") {
+      workflow.source = "Server OpenAI Key";
     }
 
-    if (serverOpenAIKey) {
-      try {
-        const workflow = await callOpenAISingle(goal, serverOpenAIKey, mode, instructionStyle);
-        workflow.source = "Server OpenAI Key";
-        return res.json(workflow);
-      } catch (error) {
-        console.error("Server OpenAI workflow failed:", error?.message || error);
-        return res.json(
-          buildFallbackWorkflow(
-            goal,
-            mode,
-            instructionStyle,
-            `Server OpenAI key failed: ${error?.message || "Unknown error"}. Template fallback was used.`
-          )
-        );
-      }
-    }
-
-    return res.json(
-      buildFallbackWorkflow(
-        goal,
-        mode,
-        instructionStyle,
-        "No OpenAI key was available, so template fallback was used."
-      )
-    );
+    return res.json(workflow);
   } catch (error) {
     console.error("Run workflow error:", error);
-    res.status(500).json({
-      error: "Workflow failed",
-      message: error?.message || "Unknown server error",
-      result: {},
-      shared_memory: {},
-      goal_output: "",
-      explanation: "",
-      totals: {
-        totalTokens: 0,
-        estimatedCost: "$0.0000",
-      },
-    });
+    return res.json(
+      buildFallbackWorkflow(
+        "Workflow request",
+        "planner-first",
+        "balanced",
+        `Server error: ${error?.message || "Unknown error"}. Template fallback was used.`
+      )
+    );
   }
 });
 
