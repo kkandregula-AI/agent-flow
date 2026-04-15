@@ -19,7 +19,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 12000);
 const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
 const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
 
-function clean(value, max = 4000) {
+function clean(value, max = 6000) {
   return String(value || "").trim().slice(0, max);
 }
 
@@ -32,14 +32,14 @@ function styleInstruction(style) {
 
   switch (normalized) {
     case "concise":
-      return "Keep outputs short, clear, and compact.";
+      return "Keep the response concise, direct, and compact.";
     case "detailed":
-      return "Be detailed, structured, and informative.";
+      return "Be detailed, structured, and comprehensive.";
     case "executive":
-      return "Use executive tone. Be polished and leadership-friendly.";
+      return "Use polished executive tone suitable for stakeholders and leadership.";
     case "balanced":
     default:
-      return "Be balanced. Keep outputs practical and moderately detailed.";
+      return "Be clear, practical, structured, and moderately detailed.";
   }
 }
 
@@ -47,51 +47,120 @@ function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback 
   const cleanGoal = clean(goal);
   const flowOrder = buildFlowOrder(mode);
 
+  const prd = `# Product Requirements Document
+## Product Title
+Privacy-First Expense Tracker
+
+## 1. Product Overview
+The Privacy-First Expense Tracker is a personal finance application designed to help users record, categorize, and review daily expenses while keeping their financial data private and secure.
+
+## 2. Problem Statement
+Many users want simple expense tracking tools but are concerned about sharing financial data with third-party cloud services. Existing solutions often prioritize connectivity over privacy.
+
+## 3. Target Users
+- Privacy-conscious individuals
+- Families managing household budgets
+- Users who want simple manual expense tracking
+- People who prefer local-first financial tools
+
+## 4. Goals
+- Enable users to quickly record and categorize expenses
+- Provide clear summaries and trends
+- Preserve user privacy through local-first or privacy-first design
+- Keep the interface simple and lightweight
+
+## 5. Non-Goals
+- Full accounting software
+- Tax filing support
+- Investment advisory features
+- Complex enterprise reporting
+
+## 6. Core Features
+- Add, edit, and delete expenses
+- Expense categories
+- Daily, weekly, and monthly summaries
+- Search and filter transactions
+- Privacy-first storage model
+- Export user data
+
+## 7. User Stories
+- As a user, I want to add an expense quickly so that I can track spending in real time.
+- As a user, I want to categorize expenses so that I can understand spending patterns.
+- As a user, I want my financial data to remain private so that I feel safe using the product.
+- As a user, I want monthly summaries so that I can manage my budget more effectively.
+
+## 8. Functional Requirements
+- The system must allow manual expense entry.
+- The system must support category-based classification.
+- The system must display summaries by selected time range.
+- The system must allow editing and deleting existing records.
+- The system must support exporting stored expense data.
+- The system should prioritize local or privacy-preserving storage.
+
+## 9. Success Metrics
+- Daily active usage
+- Number of expenses logged per user
+- Weekly retention
+- Percentage of users who use summaries
+- Export usage rate
+
+## 10. Risks and Considerations
+- Users may expect automatic bank integration
+- Privacy claims must be clearly explained
+- Local-only storage may create backup concerns
+- Simplicity must be balanced with usefulness
+
+## 11. Future Enhancements
+- Shared family budgets
+- Recurring expense reminders
+- Budget goal tracking
+- Better visualization dashboards
+- Optional secure backup features`;
+
   const result = {
     Orchestrator: {
-      output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work across Planner, Research, Writer, and Reviewer.`,
+      output: `The orchestrator interpreted the user goal, selected ${mode} orchestration, and routed work across Planner, Research, Writer, and Reviewer. The Writer was instructed to generate a full PRD in a ChatGPT-style structured format.`,
       time: 220,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Planner: {
-      output: `Execution plan for: ${cleanGoal}
-1. Interpret the goal
-2. Break it into structured steps
-3. Gather context and assumptions
-4. Draft the user-facing deliverable
-5. Review and refine`,
+      output: `1. Interpret the product goal
+2. Define user problem and target users
+3. Identify goals, non-goals, and features
+4. Draft structured PRD sections
+5. Review completeness and clarity
+6. Present final PRD for download`,
       time: 480,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Research: {
-      output: `Context for: ${cleanGoal}
-- The user expects a visible end result
-- Structure increases trust
-- Review keeps the final answer aligned`,
+      output: `Key assumptions:
+- Users care about privacy and simplicity
+- Manual expense logging is acceptable for MVP
+- Structured summaries are valuable
+- Export functionality improves trust and portability
+
+Risks:
+- Users may expect automation
+- Privacy expectations must be clearly explained`,
       time: 560,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Writer: {
-      output: `Created a structured deliverable for: ${cleanGoal}
-
-Delivered result:
-- Clear interpretation of the request
-- Organized output aligned to user intent
-- Draft informed by orchestration and context`,
+      output: prd,
       time: 690,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Reviewer: {
-      output: `Validation complete.
-The output is aligned, structured, and understandable.`,
+      output: `The PRD is well structured and aligned to the user goal. It includes problem, users, goals, features, requirements, metrics, risks, and future scope. Improvement note: next version can include user flows and acceptance criteria.`,
       time: 390,
       tokens: "simulated",
       cost: "N/A",
@@ -119,10 +188,8 @@ The output is aligned, structured, and understandable.`,
       reviewer_notes: result.Reviewer.output,
       final_synthesis: result.Orchestrator.output,
     },
-    goal_output: `Goal achieved for: ${cleanGoal}
-
-The system interpreted the request, planned the work, gathered context, drafted the output, and reviewed it before final delivery.`,
-    explanation: `This run used the template fallback. The orchestrator coordinated the workflow, the Planner structured the path, the Research agent gathered context, the Writer produced the user-facing result, and the Reviewer validated quality.`,
+    goal_output: prd,
+    explanation: `This run used the template fallback. The orchestrator coordinated the PRD workflow, the Planner defined the structure, the Research agent added context and risks, the Writer produced the PRD, and the Reviewer validated completeness.`,
     totals: {
       totalTokens: "simulated",
       estimatedCost: "N/A",
@@ -197,7 +264,7 @@ function extractResponseText(payload) {
 
 async function buildOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
   const prompt = `
-You are a multi-agent workflow simulator.
+You are a multi-agent workflow simulator that must return output like ChatGPT would produce for a strong Product Requirements Document.
 
 User goal:
 ${goal}
@@ -208,7 +275,7 @@ ${mode}
 Instruction style:
 ${instructionStyle}
 
-Style rule:
+Writing style rule:
 ${styleInstruction(instructionStyle)}
 
 Return STRICT JSON only with this exact shape:
@@ -225,15 +292,30 @@ Return STRICT JSON only with this exact shape:
 
 Requirements:
 - "orchestrator": explain how the workflow is routed
-- "planner": 4 to 6 numbered steps
-- "research": assumptions, context, risks
-- "writer": final user-facing deliverable
-- "reviewer": short validation note and one improvement note
-- "goal_output": concise final outcome for the user
+- "planner": 4 to 6 numbered planning steps
+- "research": user intent, assumptions, risks, and useful product context
+- "writer": produce a full PRD in a polished ChatGPT-style structured format
+- "reviewer": validate the PRD and suggest one improvement
+- "goal_output": must contain the full PRD text, not a summary
 - "explanation": explain what happened in the multi-agent workflow
-- no markdown
-- no code fences
+- no markdown code fences
 - valid JSON only
+
+For the PRD in "writer" and "goal_output", structure it with clear headings such as:
+- Product Title
+- Product Overview
+- Problem Statement
+- Target Users
+- Goals
+- Non-Goals
+- Core Features
+- User Stories
+- Functional Requirements
+- Success Metrics
+- Risks and Considerations
+- Future Enhancements
+
+Write the PRD as if ChatGPT is producing a polished document for a product manager.
 `.trim();
 
   const payload = await callOpenAI(prompt, apiKey);
@@ -311,7 +393,7 @@ Requirements:
       reviewer_notes: result.Reviewer.output,
       final_synthesis: result.Orchestrator.output,
     },
-    goal_output: parsed.goal_output || parsed.writer || `Goal output generated for: ${goal}`,
+    goal_output: parsed.goal_output || parsed.writer || `PRD generated for: ${goal}`,
     explanation: parsed.explanation || "OpenAI generated a multi-agent workflow response.",
     totals: {
       totalTokens: usage.totalTokens,
