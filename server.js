@@ -14,7 +14,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 12000);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 25000);
 
 const OPENAI_INPUT_COST_PER_1K = Number(process.env.OPENAI_INPUT_COST_PER_1K || 0.00015);
 const OPENAI_OUTPUT_COST_PER_1K = Number(process.env.OPENAI_OUTPUT_COST_PER_1K || 0.0006);
@@ -32,18 +32,160 @@ function styleInstruction(style) {
 
   switch (normalized) {
     case "concise":
-      return "Keep the response concise, direct, and compact.";
+      return "Keep the response short, direct, and compact.";
     case "detailed":
       return "Be detailed, structured, and comprehensive.";
     case "executive":
-      return "Use polished executive tone suitable for stakeholders and leadership.";
+      return "Use polished executive tone suitable for leadership and stakeholders.";
     case "balanced":
     default:
-      return "Be clear, practical, structured, and moderately detailed.";
+      return "Be clear, practical, and moderately detailed.";
   }
 }
 
-function buildFallbackWorkflow(goal, mode, instructionStyle, reason = "Fallback mode was used.") {
+function isMultiAgentEligible(goal) {
+  const text = clean(goal, 1200).toLowerCase();
+
+  const strongSignals = [
+    "prd",
+    "product requirement",
+    "requirements document",
+    "gtm",
+    "go to market",
+    "roadmap",
+    "strategy",
+    "feature spec",
+    "specification",
+    "compare",
+    "comparison",
+    "trade-off",
+    "tradeoff",
+    "analyze",
+    "analysis",
+    "research",
+    "framework",
+    "workflow",
+    "plan",
+    "architecture",
+    "proposal",
+    "business case",
+    "metrics",
+    "risks",
+    "user stories",
+    "functional requirements"
+  ];
+
+  const simpleSignals = [
+    "rewrite",
+    "rephrase",
+    "translate",
+    "summarize",
+    "summary",
+    "explain",
+    "meaning",
+    "tagline",
+    "caption",
+    "bio",
+    "one line",
+    "two lines",
+    "three lines",
+    "short answer",
+    "good english"
+  ];
+
+  const strongMatches = strongSignals.filter(s => text.includes(s)).length;
+  const simpleMatches = simpleSignals.filter(s => text.includes(s)).length;
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+
+  if (strongMatches >= 1) return true;
+  if (simpleMatches >= 1 && strongMatches === 0) return false;
+  if (wordCount >= 18) return true;
+
+  return false;
+}
+
+function buildSingleAgentPrompt(goal, instructionStyle) {
+  return `
+You are a strong single-agent assistant.
+
+User goal:
+${goal}
+
+Style rule:
+${styleInstruction(instructionStyle)}
+
+Return STRICT JSON only with this exact shape:
+
+{
+  "answer": "string",
+  "explanation": "string"
+}
+
+Requirements:
+- "answer" should directly solve the user request
+- "explanation" should briefly explain why single-agent execution was sufficient
+- no markdown code fences
+- valid JSON only
+`.trim();
+}
+
+function buildMultiAgentPrompt(goal, mode, instructionStyle) {
+  return `
+You are a multi-agent workflow simulator that must produce output in a polished ChatGPT-style format.
+
+User goal:
+${goal}
+
+Orchestration mode:
+${mode}
+
+Instruction style:
+${instructionStyle}
+
+Style rule:
+${styleInstruction(instructionStyle)}
+
+Return STRICT JSON only with this exact shape:
+
+{
+  "orchestrator": "string",
+  "planner": "string",
+  "research": "string",
+  "writer": "string",
+  "reviewer": "string",
+  "goal_output": "string",
+  "explanation": "string"
+}
+
+Requirements:
+- "orchestrator": explain how the workflow is routed
+- "planner": 4 to 6 numbered planning steps
+- "research": user intent, assumptions, risks, and useful context
+- "writer": produce the final user-facing deliverable
+- "reviewer": validate the output and suggest one improvement
+- "goal_output": must contain the final main output, not just a summary
+- "explanation": explain what happened in the multi-agent workflow
+- no markdown code fences
+- valid JSON only
+
+If the user asks for a PRD, make "writer" and "goal_output" a real PRD with headings such as:
+- Product Title
+- Product Overview
+- Problem Statement
+- Target Users
+- Goals
+- Non-Goals
+- Core Features
+- User Stories
+- Functional Requirements
+- Success Metrics
+- Risks and Considerations
+- Future Enhancements
+`.trim();
+}
+
+function buildFallbackMultiAgentWorkflow(goal, mode, instructionStyle, reason = "Fallback mode was used.") {
   const cleanGoal = clean(goal);
   const flowOrder = buildFlowOrder(mode);
 
@@ -117,21 +259,31 @@ Many users want simple expense tracking tools but are concerned about sharing fi
 - Better visualization dashboards
 - Optional secure backup features`;
 
+  const genericOutput = `Structured output for: ${cleanGoal}
+
+1. Objective
+2. Context
+3. Recommended approach
+4. Risks or caveats
+5. Final recommendation`;
+
+  const finalOutput = cleanGoal.toLowerCase().includes("prd") ? prd : genericOutput;
+
   const result = {
     Orchestrator: {
-      output: `The orchestrator interpreted the user goal, selected ${mode} orchestration, and routed work across Planner, Research, Writer, and Reviewer. The Writer was instructed to generate a full PRD in a ChatGPT-style structured format.`,
+      output: `The orchestrator interpreted the goal, selected ${mode} orchestration, and routed work across Planner, Research, Writer, and Reviewer.`,
       time: 220,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Planner: {
-      output: `1. Interpret the product goal
-2. Define user problem and target users
-3. Identify goals, non-goals, and features
-4. Draft structured PRD sections
+      output: `1. Interpret the user goal
+2. Break it into structured sections
+3. Gather context and assumptions
+4. Draft the main deliverable
 5. Review completeness and clarity
-6. Present final PRD for download`,
+6. Present final output`,
       time: 480,
       tokens: "simulated",
       cost: "N/A",
@@ -139,28 +291,27 @@ Many users want simple expense tracking tools but are concerned about sharing fi
     },
     Research: {
       output: `Key assumptions:
-- Users care about privacy and simplicity
-- Manual expense logging is acceptable for MVP
-- Structured summaries are valuable
-- Export functionality improves trust and portability
+- The user expects a structured output
+- Context and risks improve quality
+- Review improves alignment and readability
 
-Risks:
-- Users may expect automation
-- Privacy expectations must be clearly explained`,
+Potential risks:
+- Over-scoping the output
+- Missing practical details if the goal is vague`,
       time: 560,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Writer: {
-      output: prd,
+      output: finalOutput,
       time: 690,
       tokens: "simulated",
       cost: "N/A",
       status: "completed",
     },
     Reviewer: {
-      output: `The PRD is well structured and aligned to the user goal. It includes problem, users, goals, features, requirements, metrics, risks, and future scope. Improvement note: next version can include user flows and acceptance criteria.`,
+      output: `The output is structured and aligned to the user goal. Improvement note: add examples, user flows, or acceptance criteria in the next iteration if needed.`,
       time: 390,
       tokens: "simulated",
       cost: "N/A",
@@ -172,12 +323,16 @@ Risks:
     source: "Template Fallback",
     providerStatus: {
       openai: "not_used",
-      reason,
+      reason: reason.includes("aborted")
+        ? "OpenAI took longer than the allowed response time, so the app switched to the fallback engine to complete the workflow."
+        : reason,
     },
     meta: {
       mode,
       instructionStyle,
       flowOrder,
+      executionType: "multi_agent",
+      eligible: true,
     },
     result,
     shared_memory: {
@@ -188,8 +343,54 @@ Risks:
       reviewer_notes: result.Reviewer.output,
       final_synthesis: result.Orchestrator.output,
     },
-    goal_output: prd,
-    explanation: `This run used the template fallback. The orchestrator coordinated the PRD workflow, the Planner defined the structure, the Research agent added context and risks, the Writer produced the PRD, and the Reviewer validated completeness.`,
+    goal_output: finalOutput,
+    explanation: `This run used the template fallback. The orchestrator coordinated the workflow, the Planner structured the path, the Research agent gathered context, the Writer produced the deliverable, and the Reviewer validated quality.`,
+    totals: {
+      totalTokens: "simulated",
+      estimatedCost: "N/A",
+    },
+  };
+}
+
+function buildFallbackSingleAgentWorkflow(goal, instructionStyle, reason = "Fallback mode was used.") {
+  const cleanGoal = clean(goal);
+
+  return {
+    source: "Template Fallback",
+    providerStatus: {
+      openai: "not_used",
+      reason: reason.includes("aborted")
+        ? "OpenAI took longer than the allowed response time, so the app switched to the fallback engine to complete the workflow."
+        : reason,
+    },
+    meta: {
+      mode: "single-agent",
+      instructionStyle,
+      flowOrder: ["Single Agent", "Goal Output"],
+      executionType: "single_agent",
+      eligible: false,
+    },
+    result: {
+      "Single Agent": {
+        output: `Direct response for: ${cleanGoal}
+
+This task is better suited to a single-agent flow because it does not require planning, research decomposition, multi-step synthesis, or review orchestration.`,
+        time: 220,
+        tokens: "simulated",
+        cost: "N/A",
+        status: "completed",
+      },
+    },
+    shared_memory: {
+      execution_context: `Goal: ${cleanGoal}`,
+      task_graph: "Single Agent → Goal Output",
+      planner_output: "Not used in single-agent mode.",
+      research_output: "Not used in single-agent mode.",
+      reviewer_notes: "Not used in single-agent mode.",
+      final_synthesis: "Single-agent flow was selected because the task was simple enough to answer directly.",
+    },
+    goal_output: `Direct response for: ${cleanGoal}`,
+    explanation: `This run used single-agent execution because the request did not strongly benefit from planning, research decomposition, or multi-stage orchestration.`,
     totals: {
       totalTokens: "simulated",
       estimatedCost: "N/A",
@@ -262,68 +463,67 @@ function extractResponseText(payload) {
   }
 }
 
-async function buildOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
-  const prompt = `
-You are a multi-agent workflow simulator that must return output like ChatGPT would produce for a strong Product Requirements Document.
-
-User goal:
-${goal}
-
-Orchestration mode:
-${mode}
-
-Instruction style:
-${instructionStyle}
-
-Writing style rule:
-${styleInstruction(instructionStyle)}
-
-Return STRICT JSON only with this exact shape:
-
-{
-  "orchestrator": "string",
-  "planner": "string",
-  "research": "string",
-  "writer": "string",
-  "reviewer": "string",
-  "goal_output": "string",
-  "explanation": "string"
-}
-
-Requirements:
-- "orchestrator": explain how the workflow is routed
-- "planner": 4 to 6 numbered planning steps
-- "research": user intent, assumptions, risks, and useful product context
-- "writer": produce a full PRD in a polished ChatGPT-style structured format
-- "reviewer": validate the PRD and suggest one improvement
-- "goal_output": must contain the full PRD text, not a summary
-- "explanation": explain what happened in the multi-agent workflow
-- no markdown code fences
-- valid JSON only
-
-For the PRD in "writer" and "goal_output", structure it with clear headings such as:
-- Product Title
-- Product Overview
-- Problem Statement
-- Target Users
-- Goals
-- Non-Goals
-- Core Features
-- User Stories
-- Functional Requirements
-- Success Metrics
-- Risks and Considerations
-- Future Enhancements
-
-Write the PRD as if ChatGPT is producing a polished document for a product manager.
-`.trim();
-
+async function buildSingleAgentOpenAIWorkflow(goal, apiKey, instructionStyle) {
+  const prompt = buildSingleAgentPrompt(goal, instructionStyle);
   const payload = await callOpenAI(prompt, apiKey);
   const rawText = extractResponseText(payload);
 
-  if (!rawText) {
-    throw new Error("OpenAI returned no text.");
+  if (!rawText) throw new Error("OpenAI returned no text.");
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    throw new Error("OpenAI did not return valid JSON.");
   }
+
+  const usage = estimateOpenAICost(payload?.usage || {});
+
+  return {
+    source: "OpenAI",
+    providerStatus: {
+      openai: "working",
+      model: OPENAI_MODEL,
+    },
+    meta: {
+      mode: "single-agent",
+      instructionStyle,
+      flowOrder: ["Single Agent", "Goal Output"],
+      executionType: "single_agent",
+      eligible: false,
+    },
+    result: {
+      "Single Agent": {
+        output: parsed.answer || "No answer returned.",
+        time: 500,
+        tokens: usage.totalTokens,
+        cost: `$${usage.estimatedCost.toFixed(4)}`,
+        status: "completed",
+      },
+    },
+    shared_memory: {
+      execution_context: `Goal: ${goal}`,
+      task_graph: "Single Agent → Goal Output",
+      planner_output: "Not used in single-agent mode.",
+      research_output: "Not used in single-agent mode.",
+      reviewer_notes: "Not used in single-agent mode.",
+      final_synthesis: parsed.explanation || "Single-agent mode was sufficient for this request.",
+    },
+    goal_output: parsed.answer || "No answer returned.",
+    explanation: parsed.explanation || "Single-agent mode was sufficient for this request.",
+    totals: {
+      totalTokens: usage.totalTokens,
+      estimatedCost: `$${usage.estimatedCost.toFixed(4)}`,
+    },
+  };
+}
+
+async function buildMultiAgentOpenAIWorkflow(goal, apiKey, mode, instructionStyle) {
+  const prompt = buildMultiAgentPrompt(goal, mode, instructionStyle);
+  const payload = await callOpenAI(prompt, apiKey);
+  const rawText = extractResponseText(payload);
+
+  if (!rawText) throw new Error("OpenAI returned no text.");
 
   let parsed;
   try {
@@ -383,6 +583,8 @@ Write the PRD as if ChatGPT is producing a polished document for a product manag
       mode,
       instructionStyle,
       flowOrder,
+      executionType: "multi_agent",
+      eligible: true,
     },
     result,
     shared_memory: {
@@ -393,7 +595,7 @@ Write the PRD as if ChatGPT is producing a polished document for a product manag
       reviewer_notes: result.Reviewer.output,
       final_synthesis: result.Orchestrator.output,
     },
-    goal_output: parsed.goal_output || parsed.writer || `PRD generated for: ${goal}`,
+    goal_output: parsed.goal_output || parsed.writer || `Generated output for: ${goal}`,
     explanation: parsed.explanation || "OpenAI generated a multi-agent workflow response.",
     totals: {
       totalTokens: usage.totalTokens,
@@ -424,33 +626,6 @@ app.get("/api/health", (req, res) => {
     openaiModel: OPENAI_MODEL,
     requestTimeoutMs: REQUEST_TIMEOUT_MS,
   });
-});
-
-app.get("/api/test-openai", async (req, res) => {
-  try {
-    const serverOpenAIKey = clean(process.env.OPENAI_API_KEY || "", 1000);
-
-    if (!serverOpenAIKey) {
-      return res.status(400).json({
-        ok: false,
-        message: "No OPENAI_API_KEY found in environment.",
-      });
-    }
-
-    const payload = await callOpenAI("Reply with only: OPENAI_OK", serverOpenAIKey);
-
-    return res.json({
-      ok: true,
-      reply: extractResponseText(payload),
-      usage: payload?.usage || {},
-      model: OPENAI_MODEL,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      message: error.message,
-    });
-  }
 });
 
 app.post("/api/validate-key", async (req, res) => {
@@ -492,28 +667,65 @@ app.post("/api/run", async (req, res) => {
     }
 
     const apiKeyToUse = userApiKey || serverOpenAIKey;
+    const eligibleForMultiAgent = isMultiAgentEligible(goal);
 
     if (!apiKeyToUse) {
+      if (eligibleForMultiAgent) {
+        return res.json(
+          buildFallbackMultiAgentWorkflow(
+            goal,
+            mode,
+            instructionStyle,
+            "No OpenAI key was available, so template fallback was used."
+          )
+        );
+      }
+
       return res.json(
-        buildFallbackWorkflow(
+        buildFallbackSingleAgentWorkflow(
           goal,
-          mode,
           instructionStyle,
-          "No OpenAI key was available, so template fallback was used."
+          "No OpenAI key was available, so single-agent template fallback was used."
         )
       );
     }
 
-    const workflowPromise = buildOpenAIWorkflow(goal, apiKeyToUse, mode, instructionStyle);
+    if (eligibleForMultiAgent) {
+      const workflowPromise = buildMultiAgentOpenAIWorkflow(goal, apiKeyToUse, mode, instructionStyle);
+
+      const timeoutFallbackPromise = new Promise((resolve) => {
+        setTimeout(() => {
+          resolve(
+            buildFallbackMultiAgentWorkflow(
+              goal,
+              mode,
+              instructionStyle,
+              `OpenAI workflow exceeded ${REQUEST_TIMEOUT_MS} ms, so template fallback was used.`
+            )
+          );
+        }, REQUEST_TIMEOUT_MS + 1000);
+      });
+
+      const workflow = await Promise.race([workflowPromise, timeoutFallbackPromise]);
+
+      if (userApiKey && workflow.source === "OpenAI") {
+        workflow.source = "User OpenAI Key";
+      } else if (serverOpenAIKey && workflow.source === "OpenAI") {
+        workflow.source = "Server OpenAI Key";
+      }
+
+      return res.json(workflow);
+    }
+
+    const workflowPromise = buildSingleAgentOpenAIWorkflow(goal, apiKeyToUse, instructionStyle);
 
     const timeoutFallbackPromise = new Promise((resolve) => {
       setTimeout(() => {
         resolve(
-          buildFallbackWorkflow(
+          buildFallbackSingleAgentWorkflow(
             goal,
-            mode,
             instructionStyle,
-            `OpenAI workflow exceeded ${REQUEST_TIMEOUT_MS} ms, so template fallback was used.`
+            `OpenAI workflow exceeded ${REQUEST_TIMEOUT_MS} ms, so single-agent template fallback was used.`
           )
         );
       }, REQUEST_TIMEOUT_MS + 1000);
@@ -531,9 +743,8 @@ app.post("/api/run", async (req, res) => {
   } catch (error) {
     console.error("Run workflow error:", error);
     return res.json(
-      buildFallbackWorkflow(
+      buildFallbackSingleAgentWorkflow(
         "Workflow request",
-        "planner-first",
         "balanced",
         `Server error: ${error?.message || "Unknown error"}. Template fallback was used.`
       )
