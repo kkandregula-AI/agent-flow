@@ -1,14 +1,16 @@
+let latestGoalOutput = "";
+let latestGoalTitle = "Generated_PRD";
+
 document.addEventListener("DOMContentLoaded", () => {
   const runBtn = document.getElementById("runBtn");
   const validateBtn = document.getElementById("validateBtn");
+  const downloadTxtBtn = document.getElementById("downloadTxtBtn");
+  const downloadMdBtn = document.getElementById("downloadMdBtn");
 
-  if (runBtn) {
-    runBtn.addEventListener("click", run);
-  }
-
-  if (validateBtn) {
-    validateBtn.addEventListener("click", validateKey);
-  }
+  if (runBtn) runBtn.addEventListener("click", run);
+  if (validateBtn) validateBtn.addEventListener("click", validateKey);
+  if (downloadTxtBtn) downloadTxtBtn.addEventListener("click", () => downloadGoalOutput("txt"));
+  if (downloadMdBtn) downloadMdBtn.addEventListener("click", () => downloadGoalOutput("md"));
 });
 
 async function run() {
@@ -20,7 +22,6 @@ async function run() {
   const sourceBadge = document.getElementById("sourceBadge");
   const providerNote = document.getElementById("providerNote");
   const totalsBox = document.getElementById("totalsBox");
-  const flow = document.getElementById("flow");
   const feed = document.getElementById("feed");
   const output = document.getElementById("output");
   const explainer = document.getElementById("explainer");
@@ -41,11 +42,12 @@ async function run() {
   sourceBadge.textContent = "Running...";
   providerNote.textContent = "Calling backend...";
   totalsBox.innerHTML = "";
-
-  if (flow) flow.innerHTML = "<div class='flow-step active'>Loading...</div>";
   if (feed) feed.innerHTML = "<div class='feed-item'>Waiting for API response...</div>";
   if (output) output.innerHTML = "";
   if (explainer) explainer.innerHTML = "";
+
+  latestGoalOutput = "";
+  latestGoalTitle = buildFileName(goal);
 
   if (memoryExecution) memoryExecution.textContent = "Running...";
   if (memoryTaskGraph) memoryTaskGraph.textContent = "Running...";
@@ -181,29 +183,6 @@ async function run() {
       `).join("");
     }
 
-    if (flow) {
-      flow.innerHTML = flowOrder.map(step => {
-        if (step === "Goal Output") {
-          return `
-            <div class="flow-step active">
-              <div class="flow-step-title">Goal Output</div>
-              <div class="flow-step-sub">Completed</div>
-            </div>
-          `;
-        }
-
-        const agent = agents[step];
-        if (!agent) return "";
-
-        return `
-          <div class="flow-step active">
-            <div class="flow-step-title">${escapeHtml(step)}</div>
-            <div class="flow-step-sub">${escapeHtml(String(agent.status || "completed"))}</div>
-          </div>
-        `;
-      }).join("");
-    }
-
     if (feed) {
       const feedHtml = [];
 
@@ -231,11 +210,14 @@ async function run() {
       feed.innerHTML = feedHtml.join("") || "<div class='feed-item'>No agent feed returned.</div>";
     }
 
+    const finalGoalOutput = data.goal_output || agents.Writer?.output || "No goal output returned.";
+    latestGoalOutput = toText(finalGoalOutput);
+
     if (output) {
       output.innerHTML = `
         <div class="goal-result">
-          <div class="goal-title">Goal Achieved Output</div>
-          <div class="goal-body">${formatMultiline(data.goal_output || agents.Writer?.output || "No goal output returned.")}</div>
+          <div class="goal-title">Generated PRD</div>
+          <div class="goal-body">${formatMultiline(finalGoalOutput)}</div>
         </div>
       `;
     }
@@ -255,10 +237,6 @@ async function run() {
     providerNote.textContent = error.name === "AbortError"
       ? "Browser request timed out after 15 seconds."
       : error.message;
-
-    if (flow) {
-      flow.innerHTML = "<div class='flow-step active'>Workflow failed</div>";
-    }
 
     if (feed) {
       feed.innerHTML = `<div class="feed-item">Error: ${escapeHtml(error.message)}</div>`;
@@ -309,6 +287,34 @@ async function validateKey() {
     keyStatus.textContent = `Validation error: ${error.message}`;
     keyStatus.className = "key-status bad";
   }
+}
+
+function downloadGoalOutput(ext) {
+  if (!latestGoalOutput) {
+    alert("Please generate the PRD first.");
+    return;
+  }
+
+  const mime = ext === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8";
+  const blob = new Blob([latestGoalOutput], { type: mime });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${latestGoalTitle}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  URL.revokeObjectURL(url);
+}
+
+function buildFileName(goal) {
+  const base = toText(goal).trim() || "Generated_PRD";
+  return base
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "_")
+    .slice(0, 60) || "Generated_PRD";
 }
 
 function normalizeAgents(rawAgents) {
