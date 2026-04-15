@@ -25,7 +25,7 @@ async function run() {
   const visualizer = document.getElementById("visualizer");
 
   sourceBadge.textContent = "Running...";
-  providerNote.textContent = "Checking provider and executing workflow.";
+  providerNote.textContent = "Calling backend and executing workflow.";
   totalsBox.innerHTML = "";
   flow.innerHTML = "<div class='flow-step active'>Starting workflow...</div>";
   feed.innerHTML = "<div class='feed-item'>Running agents...</div>";
@@ -48,28 +48,27 @@ async function run() {
     const res = await fetch("/api/run", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         goal,
         userApiKey: apiKey || null,
         mode,
-        instructionStyle,
-      }),
+        instructionStyle
+      })
     });
 
     const data = await res.json();
     console.log("API FULL RESPONSE:", data);
 
     const agents = data.result || {};
-    const agentNames = Object.keys(agents);
     const flowOrder = data.meta?.flowOrder || [
       "Orchestrator",
       "Planner",
       "Research",
       "Writer",
       "Reviewer",
-      "Goal Output",
+      "Goal Output"
     ];
 
     sourceBadge.textContent = data.source || "Unknown Source";
@@ -105,10 +104,30 @@ async function run() {
 
     memoryExecution.textContent = data.shared_memory?.execution_context || `Goal: ${goal}`;
     memoryTaskGraph.textContent = data.shared_memory?.task_graph || flowOrder.join(" → ");
-    memoryPlanner.innerHTML = formatMultiline(data.shared_memory?.planner_output || "No planner output.");
-    memoryResearch.innerHTML = formatMultiline(data.shared_memory?.research_output || "No research output.");
-    memoryReviewer.innerHTML = formatMultiline(data.shared_memory?.reviewer_notes || "No reviewer notes.");
-    memorySynthesis.innerHTML = formatMultiline(data.shared_memory?.final_synthesis || "No final synthesis.");
+
+    memoryPlanner.innerHTML = formatMultiline(
+      Array.isArray(data.shared_memory?.planner_output)
+        ? data.shared_memory.planner_output.join("\n")
+        : data.shared_memory?.planner_output || "No planner output."
+    );
+
+    memoryResearch.innerHTML = formatMultiline(
+      Array.isArray(data.shared_memory?.research_output)
+        ? data.shared_memory.research_output.join("\n")
+        : data.shared_memory?.research_output || "No research output."
+    );
+
+    memoryReviewer.innerHTML = formatMultiline(
+      Array.isArray(data.shared_memory?.reviewer_notes)
+        ? data.shared_memory.reviewer_notes.join("\n")
+        : data.shared_memory?.reviewer_notes || "No reviewer notes."
+    );
+
+    memorySynthesis.innerHTML = formatMultiline(
+      Array.isArray(data.shared_memory?.final_synthesis)
+        ? data.shared_memory.final_synthesis.join("\n")
+        : data.shared_memory?.final_synthesis || "No final synthesis."
+    );
 
     visualMode.textContent = mode;
     visualStyle.textContent = instructionStyle;
@@ -119,6 +138,8 @@ async function run() {
 
     flow.innerHTML = "";
     feed.innerHTML = "";
+
+    const agentNames = Object.keys(agents);
 
     if (agentNames.length === 0) {
       flow.innerHTML = "<div class='flow-step active'>No agent data returned</div>";
@@ -134,7 +155,18 @@ async function run() {
         continue;
       }
 
-      const agent = agents[agentName];
+      const raw = agents[agentName];
+
+      const agent = typeof raw === "string"
+        ? {
+            output: raw,
+            time: "—",
+            tokens: "—",
+            cost: "—",
+            status: "completed"
+          }
+        : raw;
+
       if (!agent) continue;
 
       flow.innerHTML += `
@@ -150,15 +182,15 @@ async function run() {
         <div class="feed-item">
           <div class="feed-head">
             <strong>${escapeHtml(agentName)}</strong>
-            <span class="status-chip">${escapeHtml(String(agent.status ?? "completed"))}</span>
+            <span class="status-chip">${escapeHtml(String(agent.status || "completed"))}</span>
           </div>
           <div class="feed-body">
             ${formatMultiline(agent.output || "No output")}
           </div>
           <div class="feed-metrics">
-            <span>⏱ ${escapeHtml(String(agent.time ?? "N/A"))} ms</span>
-            <span>Tokens: ${escapeHtml(String(agent.tokens ?? "N/A"))}</span>
-            <span>Cost: ${escapeHtml(String(agent.cost ?? "N/A"))}</span>
+            <span>⏱ ${escapeHtml(String(agent.time ?? "—"))} ms</span>
+            <span>Tokens: ${escapeHtml(String(agent.tokens ?? "—"))}</span>
+            <span>Cost: ${escapeHtml(String(agent.cost ?? "—"))}</span>
           </div>
         </div>
       `;
@@ -207,9 +239,9 @@ async function validateKey() {
     const res = await fetch("/api/validate-key", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify({ userApiKey: apiKey }),
+      body: JSON.stringify({ userApiKey: apiKey })
     });
 
     const data = await res.json();
@@ -262,6 +294,7 @@ async function pulseVisualizer(stepName) {
   if (visualNode) {
     visualNode.classList.add("active");
   }
+
   if (mapNode) {
     mapNode.classList.add("active");
     const sub = mapNode.querySelector(".map-card-sub");
@@ -280,7 +313,7 @@ function formatMultiline(text) {
 }
 
 function escapeHtml(text) {
-  return text
+  return String(text)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
